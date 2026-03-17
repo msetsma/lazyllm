@@ -34,6 +34,7 @@ export OPENAI_API_KEY="sk-..."
 
 2. Create a config file at `~/.config/lazyllm/config.toml`:
 
+
 ```toml
 [general]
 default_provider = "openai"
