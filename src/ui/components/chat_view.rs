@@ -182,8 +182,9 @@ impl ChatView {
     }
 
     /// Build all lines for rendering, using markdown for assistant messages.
-    fn build_lines(&self, theme: &Theme) -> Vec<Line<'_>> {
-        let mut lines = Vec::new();
+    /// Preprocesses assistant content to convert LaTeX and tables before rendering.
+    fn build_lines(&self, theme: &Theme) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
         let highlight_style = Style::default()
             .bg(theme.highlight)
             .fg(ratatui::style::Color::Black)
@@ -220,11 +221,10 @@ impl ChatView {
                 lines.push(markdown::role_label(label, color));
             }
 
-            // Message content
-            let content_lines: Vec<Line<'_>> = match msg.role {
+            // Message content — assistant gets LaTeX/table preprocessing
+            let content_lines: Vec<Line<'static>> = match msg.role {
                 MessageRole::Assistant => {
-                    let rendered = markdown::render_markdown(&msg.content);
-                    rendered.lines.into_iter().map(|l| l.to_owned()).collect()
+                    markdown::render_markdown_preprocessed(&msg.content)
                 }
                 MessageRole::User | MessageRole::System => {
                     let rendered = markdown::render_plain(&msg.content);

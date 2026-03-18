@@ -1,3 +1,6 @@
+pub mod latex;
+pub mod tables;
+
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 
@@ -10,6 +13,35 @@ pub fn render_markdown(input: &str) -> Text<'_> {
         return Text::default();
     }
     tui_markdown::from_str(input)
+}
+
+/// Preprocess and render markdown, returning fully owned lines.
+///
+/// Applies LaTeX→Unicode and table→box-drawing conversion, then renders
+/// the result through `tui_markdown`. All strings are owned so the
+/// result has a `'static` lifetime.
+pub fn render_markdown_preprocessed(input: &str) -> Vec<Line<'static>> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+
+    let processed = latex::convert_latex(input);
+    let processed = tables::convert_tables(&processed);
+    let rendered = tui_markdown::from_str(&processed);
+
+    // Deep-clone lines to own all string data
+    rendered
+        .lines
+        .into_iter()
+        .map(|line| {
+            let owned_spans: Vec<Span<'static>> = line
+                .spans
+                .into_iter()
+                .map(|span| Span::styled(span.content.to_string(), span.style))
+                .collect();
+            Line::from(owned_spans)
+        })
+        .collect()
 }
 
 /// Render plain text (no markdown parsing) into ratatui `Text`.
