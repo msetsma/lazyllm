@@ -6,6 +6,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::event::types::Action;
 use crate::markdown;
+use crate::markdown::RenderOptions;
 use crate::ui::theme::Theme;
 
 use super::Component;
@@ -52,6 +53,7 @@ pub struct ChatView {
     pub(crate) messages: Vec<ChatMessage>,
     pub(crate) scroll_offset: u16,
     pub(crate) show_timestamps: bool,
+    pub(crate) render_options: RenderOptions,
     pub(crate) search_query: String,
     pub(crate) search_matches: Vec<SearchMatch>,
     pub(crate) search_current: usize,
@@ -69,10 +71,15 @@ impl ChatView {
             messages: Vec::new(),
             scroll_offset: 0,
             show_timestamps: false,
+            render_options: RenderOptions::default(),
             search_query: String::new(),
             search_matches: Vec::new(),
             search_current: 0,
         }
+    }
+
+    pub fn set_render_options(&mut self, opts: RenderOptions) {
+        self.render_options = opts;
     }
 
     pub fn set_show_timestamps(&mut self, show: bool) {
@@ -224,7 +231,7 @@ impl ChatView {
             // Message content — assistant gets LaTeX/table preprocessing
             let content_lines: Vec<Line<'static>> = match msg.role {
                 MessageRole::Assistant => {
-                    markdown::render_markdown_preprocessed(&msg.content)
+                    markdown::render_markdown_preprocessed(&msg.content, self.render_options)
                 }
                 MessageRole::User | MessageRole::System => {
                     let rendered = markdown::render_plain(&msg.content);

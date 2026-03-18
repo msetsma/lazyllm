@@ -10,9 +10,43 @@ pub struct AppConfig {
     #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
+    pub features: FeaturesConfig,
+    #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
     #[serde(default)]
     pub mcp: McpConfig,
+}
+
+/// Feature toggles for optional functionality.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FeaturesConfig {
+    /// Convert LaTeX math expressions to Unicode symbols.
+    #[serde(default = "default_true")]
+    pub latex_rendering: bool,
+    /// Render markdown tables with box-drawing characters.
+    #[serde(default = "default_true")]
+    pub table_rendering: bool,
+    /// Enable `/` search within conversations.
+    #[serde(default = "default_true")]
+    pub search: bool,
+    /// Enable the context system (`:context` command).
+    #[serde(default = "default_true")]
+    pub contexts: bool,
+    /// Enable MCP (Model Context Protocol) tool integration.
+    #[serde(default = "default_true")]
+    pub mcp_servers: bool,
+}
+
+impl Default for FeaturesConfig {
+    fn default() -> Self {
+        Self {
+            latex_rendering: true,
+            table_rendering: true,
+            search: true,
+            contexts: true,
+            mcp_servers: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

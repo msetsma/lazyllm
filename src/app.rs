@@ -92,9 +92,17 @@ impl App {
 
         let mut chat_view = ChatView::new();
         chat_view.set_show_timestamps(config.ui.show_timestamps);
+        chat_view.set_render_options(crate::markdown::RenderOptions {
+            latex: config.features.latex_rendering,
+            tables: config.features.table_rendering,
+        });
 
-        // Load contexts from disk
-        let contexts = crate::context::load_contexts(&config.general.contexts_dir);
+        // Load contexts from disk (if enabled)
+        let contexts = if config.features.contexts {
+            crate::context::load_contexts(&config.general.contexts_dir)
+        } else {
+            std::collections::HashMap::new()
+        };
         let active_context = config
             .general
             .default_context
@@ -145,6 +153,11 @@ impl App {
 
     /// Initialize MCP servers from config.
     pub async fn init_mcp(&mut self) {
+        if !self.config.features.mcp_servers {
+            tracing::info!("MCP servers disabled in config");
+            return;
+        }
+
         let servers = &self.config.mcp.servers;
         if servers.is_empty() {
             tracing::info!("No MCP servers configured");
@@ -267,6 +280,10 @@ impl App {
                 self.running = false;
             }
             Action::SwitchMode(mode) => {
+                // Gate search mode on feature flag
+                if mode == Mode::Search && !self.config.features.search {
+                    return;
+                }
                 // Exiting search mode: clear search state
                 if self.mode == Mode::Search && mode != Mode::Search {
                     self.chat_view.clear_search();
@@ -481,7 +498,9 @@ impl App {
                 self.save_active_conversation();
             }
             Command::Context(Some(name)) => {
-                if self.contexts.contains_key(&name) {
+                if !self.config.features.contexts {
+                    self.status_bar.set_status("Contexts feature is disabled in config".to_string());
+                } else if self.contexts.contains_key(&name) {
                     self.active_context = Some(name.clone());
                     self.model_selector.context_name = Some(name.clone());
                     if let Some(conv) = &mut self.conversations.active_conversation {
@@ -504,12 +523,16 @@ impl App {
                 }
             }
             Command::Context(None) => {
-                self.active_context = None;
-                self.model_selector.context_name = None;
-                if let Some(conv) = &mut self.conversations.active_conversation {
-                    conv.context_name = None;
+                if !self.config.features.contexts {
+                    self.status_bar.set_status("Contexts feature is disabled in config".to_string());
+                } else {
+                    self.active_context = None;
+                    self.model_selector.context_name = None;
+                    if let Some(conv) = &mut self.conversations.active_conversation {
+                        conv.context_name = None;
+                    }
+                    self.status_bar.set_status("Context cleared".to_string());
                 }
-                self.status_bar.set_status("Context cleared".to_string());
             }
             Command::Unknown(cmd) => {
                 self.status_bar

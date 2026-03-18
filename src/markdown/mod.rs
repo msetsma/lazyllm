@@ -15,18 +15,39 @@ pub fn render_markdown(input: &str) -> Text<'_> {
     tui_markdown::from_str(input)
 }
 
+/// Options controlling which preprocessing steps to apply.
+#[derive(Debug, Clone, Copy)]
+pub struct RenderOptions {
+    pub latex: bool,
+    pub tables: bool,
+}
+
+impl Default for RenderOptions {
+    fn default() -> Self {
+        Self {
+            latex: true,
+            tables: true,
+        }
+    }
+}
+
 /// Preprocess and render markdown, returning fully owned lines.
 ///
-/// Applies LaTeX→Unicode and table→box-drawing conversion, then renders
-/// the result through `tui_markdown`. All strings are owned so the
-/// result has a `'static` lifetime.
-pub fn render_markdown_preprocessed(input: &str) -> Vec<Line<'static>> {
+/// Applies LaTeX→Unicode and table→box-drawing conversion (based on options),
+/// then renders the result through `tui_markdown`. All strings are owned so
+/// the result has a `'static` lifetime.
+pub fn render_markdown_preprocessed(input: &str, opts: RenderOptions) -> Vec<Line<'static>> {
     if input.is_empty() {
         return Vec::new();
     }
 
-    let processed = latex::convert_latex(input);
-    let processed = tables::convert_tables(&processed);
+    let mut processed = input.to_string();
+    if opts.latex {
+        processed = latex::convert_latex(&processed);
+    }
+    if opts.tables {
+        processed = tables::convert_tables(&processed);
+    }
     let rendered = tui_markdown::from_str(&processed);
 
     // Deep-clone lines to own all string data
