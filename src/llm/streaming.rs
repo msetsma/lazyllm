@@ -1,7 +1,7 @@
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
-use super::types::{LlmError, StreamChunk, TokenUsage};
+use super::types::{LlmError, StreamChunk};
 
 /// Stream an SSE response, parsing each line and sending chunks to the channel.
 ///
@@ -10,7 +10,7 @@ use super::types::{LlmError, StreamChunk, TokenUsage};
 pub async fn stream_sse_response(
     response: reqwest::Response,
     tx: &mpsc::UnboundedSender<StreamChunk>,
-    parse_line: impl Fn(&str) -> Option<StreamChunk>,
+    mut parse_line: impl FnMut(&str) -> Option<StreamChunk>,
     skip_line: impl Fn(&str) -> bool,
 ) -> Result<(), LlmError> {
     let mut stream = response.bytes_stream();
@@ -30,6 +30,45 @@ pub async fn stream_sse_response(
             }
 
             if let Some(chunk) = parse_line(&line) {
+                let is_done = chunk == StreamChunk::Done;
+                if tx.send(chunk).is_err() {
+                    return Ok(());
+                }
+                if is_done {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    tx.send(StreamChunk::Done).ok();
+    Ok(())
+}
+
+/// Like `stream_sse_response` but the parse function can return multiple chunks per line.
+pub async fn stream_sse_response_multi(
+    response: reqwest::Response,
+    tx: &mpsc::UnboundedSender<StreamChunk>,
+    mut parse_line: impl FnMut(&str) -> Vec<StreamChunk>,
+    skip_line: impl Fn(&str) -> bool,
+) -> Result<(), LlmError> {
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+
+    while let Some(chunk_result) = stream.next().await {
+        let bytes = chunk_result.map_err(|e| LlmError::NetworkError(e.to_string()))?;
+        let text = String::from_utf8_lossy(&bytes);
+        buffer.push_str(&text);
+
+        while let Some(newline_pos) = buffer.find('\n') {
+            let line = buffer[..newline_pos].trim().to_string();
+            buffer = buffer[newline_pos + 1..].to_string();
+
+            if line.is_empty() || skip_line(&line) {
+                continue;
+            }
+
+            for chunk in parse_line(&line) {
                 let is_done = chunk == StreamChunk::Done;
                 if tx.send(chunk).is_err() {
                     return Ok(());

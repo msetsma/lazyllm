@@ -5,5 +5,6 @@ pub mod conversation;
 pub mod event;
 pub mod llm;
 pub mod markdown;
+pub mod mcp;
 pub mod store;
 pub mod ui;

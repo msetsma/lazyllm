@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 
 use super::LlmProvider;
 use super::streaming::{check_http_error, stream_sse_response};
-use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk, TokenUsage};
+use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk, ToolCall, ToolDefinition, TokenUsage};
 
 #[allow(dead_code)]
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -61,12 +61,46 @@ struct AnthropicRequest {
     system: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<AnthropicTool>>,
+}
+
+#[derive(Debug, Serialize)]
+struct AnthropicTool {
+    name: String,
+    description: String,
+    input_schema: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum AnthropicMessageContent {
+    Text(String),
+    Blocks(Vec<AnthropicContentBlock>),
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+enum AnthropicContentBlock {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
 struct AnthropicMessage {
     role: String,
-    content: String,
+    content: AnthropicMessageContent,
 }
 
 /// SSE event types from the Anthropic API.
@@ -75,6 +109,9 @@ struct AnthropicStreamEvent {
     #[serde(rename = "type")]
     event_type: String,
     #[serde(default)]
+    #[allow(dead_code)]
+    index: Option<usize>,
+    #[serde(default)]
     delta: Option<AnthropicDelta>,
     #[serde(default)]
     message: Option<AnthropicStreamMessage>,
@@ -82,6 +119,18 @@ struct AnthropicStreamEvent {
     usage: Option<AnthropicUsage>,
     #[serde(default)]
     error: Option<AnthropicErrorDetail>,
+    #[serde(default)]
+    content_block: Option<AnthropicContentBlockStart>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicContentBlockStart {
+    #[serde(rename = "type")]
+    block_type: String,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,6 +154,8 @@ struct AnthropicDelta {
     delta_type: Option<String>,
     #[serde(default)]
     text: Option<String>,
+    #[serde(default)]
+    partial_json: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,6 +174,19 @@ struct AnthropicErrorResponseDetail {
     message: String,
 }
 
+fn convert_anthropic_tools(tools: &Option<Vec<ToolDefinition>>) -> Option<Vec<AnthropicTool>> {
+    tools.as_ref().map(|tools| {
+        tools
+            .iter()
+            .map(|t| AnthropicTool {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                input_schema: t.input_schema.clone(),
+            })
+            .collect()
+    })
+}
+
 impl From<&ChatRequest> for AnthropicRequest {
     fn from(req: &ChatRequest) -> Self {
         let mut system = None;
@@ -133,12 +197,52 @@ impl From<&ChatRequest> for AnthropicRequest {
 
             if role == "system" {
                 system = Some(msg.content.clone());
-            } else {
-                messages.push(AnthropicMessage {
-                    role: role.to_string(),
-                    content: msg.content.clone(),
-                });
+                continue;
             }
+
+            // Handle assistant messages with tool calls
+            if let Some(tool_calls) = &msg.tool_calls {
+                let mut blocks = Vec::new();
+                if !msg.content.is_empty() {
+                    blocks.push(AnthropicContentBlock::Text {
+                        text: msg.content.clone(),
+                    });
+                }
+                for tc in tool_calls {
+                    let input: serde_json::Value =
+                        serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
+                    blocks.push(AnthropicContentBlock::ToolUse {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        input,
+                    });
+                }
+                messages.push(AnthropicMessage {
+                    role: "assistant".to_string(),
+                    content: AnthropicMessageContent::Blocks(blocks),
+                });
+                continue;
+            }
+
+            // Handle tool result messages
+            if let Some(tool_call_id) = &msg.tool_call_id {
+                messages.push(AnthropicMessage {
+                    role: "user".to_string(),
+                    content: AnthropicMessageContent::Blocks(vec![
+                        AnthropicContentBlock::ToolResult {
+                            tool_use_id: tool_call_id.clone(),
+                            content: msg.content.clone(),
+                        },
+                    ]),
+                });
+                continue;
+            }
+
+            // Regular messages
+            messages.push(AnthropicMessage {
+                role: role.to_string(),
+                content: AnthropicMessageContent::Text(msg.content.clone()),
+            });
         }
 
         Self {
@@ -148,7 +252,46 @@ impl From<&ChatRequest> for AnthropicRequest {
             stream: true,
             system,
             temperature: req.temperature,
+            tools: convert_anthropic_tools(&req.tools),
         }
+    }
+}
+
+/// Accumulated state for Anthropic tool use blocks during streaming.
+#[derive(Debug, Default)]
+struct AnthropicToolAccumulator {
+    /// Currently accumulating tool call, if any.
+    current: Option<AccumulatingToolBlock>,
+}
+
+#[derive(Debug, Default)]
+struct AccumulatingToolBlock {
+    id: String,
+    name: String,
+    arguments_json: String,
+}
+
+impl AnthropicToolAccumulator {
+    fn start_tool(&mut self, id: String, name: String) {
+        self.current = Some(AccumulatingToolBlock {
+            id,
+            name,
+            arguments_json: String::new(),
+        });
+    }
+
+    fn append_json(&mut self, json: &str) {
+        if let Some(current) = &mut self.current {
+            current.arguments_json.push_str(json);
+        }
+    }
+
+    fn finish_tool(&mut self) -> Option<ToolCall> {
+        self.current.take().map(|block| ToolCall {
+            id: block.id,
+            name: block.name,
+            arguments: block.arguments_json,
+        })
     }
 }
 
@@ -173,7 +316,6 @@ fn parse_anthropic_sse(line: &str) -> Option<StreamChunk> {
             None
         }
         "message_start" => {
-            // Extract input_tokens from message_start.message.usage
             if let Some(msg) = &event.message
                 && let Some(usage) = &msg.usage
                 && let Some(input) = usage.input_tokens
@@ -183,7 +325,6 @@ fn parse_anthropic_sse(line: &str) -> Option<StreamChunk> {
             None
         }
         "message_delta" => {
-            // Extract output_tokens from message_delta.usage
             if let Some(usage) = &event.usage
                 && let Some(output) = usage.output_tokens
             {
@@ -199,7 +340,87 @@ fn parse_anthropic_sse(line: &str) -> Option<StreamChunk> {
                 .unwrap_or_else(|| "Unknown error".to_string());
             Some(StreamChunk::Error(msg))
         }
-        _ => None, // content_block_start, content_block_stop, ping
+        _ => None,
+    }
+}
+
+/// Parse an Anthropic SSE line with tool use awareness.
+fn parse_anthropic_sse_with_tools(
+    line: &str,
+    accumulator: &mut AnthropicToolAccumulator,
+) -> Option<StreamChunk> {
+    let data = line.strip_prefix("data: ")?;
+
+    let event: AnthropicStreamEvent = match serde_json::from_str(data) {
+        Ok(e) => e,
+        Err(e) => return Some(StreamChunk::Error(format!("Failed to parse chunk: {e}"))),
+    };
+
+    match event.event_type.as_str() {
+        "content_block_start" => {
+            if let Some(block) = &event.content_block
+                && block.block_type == "tool_use"
+            {
+                let id = block.id.clone().unwrap_or_default();
+                let name = block.name.clone().unwrap_or_default();
+                accumulator.start_tool(id, name);
+            }
+            None
+        }
+        "content_block_delta" => {
+            if let Some(delta) = &event.delta {
+                if delta.delta_type.as_deref() == Some("text_delta") {
+                    if let Some(text) = &delta.text
+                        && !text.is_empty()
+                    {
+                        return Some(StreamChunk::Delta(text.clone()));
+                    }
+                }
+                if delta.delta_type.as_deref() == Some("input_json_delta") {
+                    if let Some(json) = &delta.partial_json {
+                        accumulator.append_json(json);
+                    }
+                }
+            }
+            None
+        }
+        "content_block_stop" => {
+            // If we were accumulating a tool call, emit it
+            if let Some(tc) = accumulator.finish_tool() {
+                return Some(StreamChunk::ToolCallStart {
+                    id: tc.id,
+                    name: tc.name,
+                    arguments: tc.arguments,
+                });
+            }
+            None
+        }
+        "message_start" => {
+            if let Some(msg) = &event.message
+                && let Some(usage) = &msg.usage
+                && let Some(input) = usage.input_tokens
+            {
+                return Some(StreamChunk::Usage(TokenUsage::new(input, 0)));
+            }
+            None
+        }
+        "message_delta" => {
+            if let Some(usage) = &event.usage
+                && let Some(output) = usage.output_tokens
+            {
+                return Some(StreamChunk::Usage(TokenUsage::new(0, output)));
+            }
+            None
+        }
+        "message_stop" => Some(StreamChunk::Done),
+        "error" => {
+            let msg = event
+                .error
+                .map(|e| e.message)
+                .unwrap_or_else(|| "Unknown error".to_string());
+            Some(StreamChunk::Error(msg))
+        }
+        _ => None,
     }
 }
 
@@ -218,6 +439,7 @@ impl LlmProvider for AnthropicProvider {
         request: ChatRequest,
         tx: mpsc::UnboundedSender<StreamChunk>,
     ) -> Result<(), LlmError> {
+        let has_tools = request.tools.is_some();
         let body = AnthropicRequest::from(&request);
         let url = self.messages_url();
 
@@ -241,13 +463,24 @@ impl LlmProvider for AnthropicProvider {
         })
         .await?;
 
-        stream_sse_response(
-            response,
-            &tx,
-            parse_anthropic_sse,
-            |line| line.starts_with("event:"),
-        )
-        .await
+        if has_tools {
+            let mut accumulator = AnthropicToolAccumulator::default();
+            stream_sse_response(
+                response,
+                &tx,
+                move |line| parse_anthropic_sse_with_tools(line, &mut accumulator),
+                |line| line.starts_with("event:"),
+            )
+            .await
+        } else {
+            stream_sse_response(
+                response,
+                &tx,
+                parse_anthropic_sse,
+                |line| line.starts_with("event:"),
+            )
+            .await
+        }
     }
 }
 
@@ -334,6 +567,7 @@ mod tests {
         assert_eq!(req.messages.len(), 1); // only user, system extracted
         assert_eq!(req.messages[0].role, "user");
         assert_eq!(req.max_tokens, DEFAULT_MAX_TOKENS);
+        assert!(req.tools.is_none());
     }
 
     #[test]
@@ -346,6 +580,24 @@ mod tests {
         let req = AnthropicRequest::from(&chat_req);
         assert!(req.system.is_none());
         assert_eq!(req.messages.len(), 1);
+    }
+
+    #[test]
+    fn anthropic_request_with_tools() {
+        let tools = vec![super::super::types::ToolDefinition {
+            name: "read_file".to_string(),
+            description: "Read a file".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }];
+        let chat_req = ChatRequest::new(
+            "claude-sonnet-4-20250514",
+            vec![Message::user("hi")],
+        )
+        .with_tools(tools);
+        let req = AnthropicRequest::from(&chat_req);
+        assert!(req.tools.is_some());
+        assert_eq!(req.tools.as_ref().unwrap().len(), 1);
+        assert_eq!(req.tools.as_ref().unwrap()[0].name, "read_file");
     }
 
     #[test]
@@ -367,6 +619,7 @@ mod tests {
         assert_eq!(json["stream"], true);
         assert_eq!(json["max_tokens"], DEFAULT_MAX_TOKENS);
         assert!(json.get("system").is_none()); // skipped when None
+        assert!(json.get("tools").is_none()); // skipped when None
     }
 
     #[test]

@@ -8,7 +8,8 @@ use crate::config::types::AppConfig;
 use crate::conversation::ConversationManager;
 use crate::event::types::{Action, FocusTarget, Mode};
 use crate::llm::ProviderRegistry;
-use crate::llm::types::{ChatRequest, Message, StreamChunk, TokenUsage};
+use crate::llm::types::{ChatRequest, Message, StreamChunk, ToolCall, TokenUsage};
+use crate::mcp::McpManager;
 use crate::store::json_store::JsonStore;
 use crate::ui::components::chat_list::ChatList;
 use crate::ui::components::chat_view::{ChatMessage, ChatView, MessageRole};
@@ -34,6 +35,9 @@ pub struct App {
     // LLM
     pub(crate) registry: Arc<ProviderRegistry>,
     pub(crate) stream_rx: Option<mpsc::UnboundedReceiver<StreamChunk>>,
+
+    // MCP
+    pub(crate) mcp_manager: Option<Arc<McpManager>>,
 
     // Token usage
     pub(crate) last_usage: Option<TokenUsage>,
@@ -93,6 +97,7 @@ impl App {
             config,
             registry: Arc::new(registry),
             stream_rx: None,
+            mcp_manager: None,
             last_usage: None,
             session_usage: TokenUsage::default(),
             conversations: ConversationManager::new(),
@@ -114,6 +119,37 @@ impl App {
             self.chat_list = ChatList::from_items(list.titles);
         }
         self
+    }
+
+    /// Initialize MCP servers from config.
+    pub async fn init_mcp(&mut self) {
+        let servers = &self.config.mcp.servers;
+        if servers.is_empty() {
+            tracing::info!("No MCP servers configured");
+            return;
+        }
+
+        tracing::info!("Initializing {} MCP server(s)...", servers.len());
+        let manager = McpManager::new(servers).await;
+
+        // Populate UI components
+        self.tool_panel.servers = manager.server_tools();
+        self.model_selector = self.model_selector.with_mcp_count(manager.server_count());
+
+        tracing::info!(
+            "MCP initialized: {} server(s), {} tool(s)",
+            manager.server_count(),
+            manager.tool_definitions().len()
+        );
+
+        self.mcp_manager = Some(Arc::new(manager));
+    }
+
+    /// Shut down all MCP servers.
+    pub async fn shutdown_mcp(&mut self) {
+        if let Some(manager) = self.mcp_manager.take() {
+            manager.shutdown_all().await;
+        }
     }
 
     /// Switch to a conversation by index in the chat list.
@@ -446,6 +482,8 @@ impl App {
     }
 
     /// Spawn a background task to stream LLM response.
+    /// When MCP tools are available, runs a tool call loop:
+    /// call LLM → if tool calls → execute tools → call LLM again → repeat.
     fn start_streaming(&mut self) {
         let provider_name = &self.config.general.default_provider;
         let _provider = match self.registry.get(provider_name) {
@@ -459,7 +497,16 @@ impl App {
 
         let model = self.config.general.default_model.clone();
         let messages = self.messages().to_vec();
-        let request = ChatRequest::new(model, messages);
+
+        // Attach MCP tools to the request if available
+        let tool_defs = self
+            .mcp_manager
+            .as_ref()
+            .filter(|m| m.has_tools())
+            .map(|m| m.tool_definitions())
+            .unwrap_or_default();
+
+        let request = ChatRequest::new(model.clone(), messages).with_tools(tool_defs);
 
         let (tx, rx) = mpsc::unbounded_channel();
         self.stream_rx = Some(rx);
@@ -477,12 +524,103 @@ impl App {
 
         let registry = Arc::clone(&self.registry);
         let provider_name = provider_name.clone();
+        let mcp_manager = self.mcp_manager.clone();
 
         tokio::spawn(async move {
-            if let Some(provider) = registry.get(&provider_name)
-                && let Err(e) = provider.chat(request, tx.clone()).await
-            {
-                tx.send(StreamChunk::Error(e.to_string())).ok();
+            let Some(provider) = registry.get(&provider_name) else {
+                tx.send(StreamChunk::Error(format!("No provider: {provider_name}"))).ok();
+                return;
+            };
+
+            // Get the tool definitions for re-use in the loop
+            let tool_defs = mcp_manager
+                .as_ref()
+                .filter(|m| m.has_tools())
+                .map(|m| m.tool_definitions())
+                .unwrap_or_default();
+            let has_mcp = !tool_defs.is_empty();
+
+            // First call
+            let mut current_request = request;
+
+            loop {
+                // Create a per-iteration channel to collect this round's chunks
+                let (iter_tx, mut iter_rx) = mpsc::unbounded_channel();
+
+                if let Err(e) = provider.chat(current_request.clone(), iter_tx).await {
+                    tx.send(StreamChunk::Error(e.to_string())).ok();
+                    return;
+                }
+
+                // Collect all chunks, forwarding text/usage to the main channel
+                // and accumulating tool calls
+                let mut tool_calls: Vec<ToolCall> = Vec::new();
+                let mut got_done = false;
+
+                while let Some(chunk) = iter_rx.recv().await {
+                    match chunk {
+                        StreamChunk::ToolCallStart { id, name, arguments } => {
+                            // Forward to UI for display
+                            tx.send(StreamChunk::ToolCallStart {
+                                id: id.clone(),
+                                name: name.clone(),
+                                arguments: arguments.clone(),
+                            }).ok();
+                            tool_calls.push(ToolCall { id, name, arguments });
+                        }
+                        StreamChunk::Done => {
+                            got_done = true;
+                            break;
+                        }
+                        other => {
+                            if tx.send(other).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // If we got tool calls and have MCP, execute them and loop
+                if !tool_calls.is_empty() && has_mcp {
+                    let mcp = mcp_manager.as_ref().unwrap();
+
+                    // Add assistant tool_use message to conversation
+                    current_request.messages.push(Message::tool_use(tool_calls.clone()));
+
+                    for tc in &tool_calls {
+                        let arguments: serde_json::Value =
+                            serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
+
+                        let result = match mcp.call_tool(&tc.name, arguments).await {
+                            Ok(r) => r,
+                            Err(e) => crate::mcp::types::ToolCallResult {
+                                content: format!("Error: {e}"),
+                                is_error: true,
+                            },
+                        };
+
+                        // Send result to UI
+                        tx.send(StreamChunk::ToolCallResult {
+                            id: tc.id.clone(),
+                            content: result.content.clone(),
+                            is_error: result.is_error,
+                        }).ok();
+
+                        // Add tool result message to conversation
+                        current_request.messages.push(
+                            Message::tool_result(&tc.id, &result.content),
+                        );
+                    }
+
+                    // Continue the loop — call LLM again with tool results
+                    continue;
+                }
+
+                // No tool calls or no MCP — we're done
+                if got_done {
+                    tx.send(StreamChunk::Done).ok();
+                }
+                break;
             }
         });
     }
@@ -504,6 +642,24 @@ impl App {
                     let current = self.last_usage.get_or_insert(TokenUsage::default());
                     current.input_tokens += usage.input_tokens;
                     current.output_tokens += usage.output_tokens;
+                }
+                Ok(StreamChunk::ToolCallStart { name, .. }) => {
+                    self.chat_view
+                        .append_to_last(&format!("\n[Calling tool: {name}...]"));
+                    self.status_bar
+                        .set_status(format!("calling tool: {name}..."));
+                }
+                Ok(StreamChunk::ToolCallResult { content, is_error, .. }) => {
+                    let prefix = if is_error { "Tool error" } else { "Tool result" };
+                    // Show a truncated preview of the result inline
+                    let preview = if content.len() > 200 {
+                        format!("{}...", &content[..200])
+                    } else {
+                        content
+                    };
+                    self.chat_view
+                        .append_to_last(&format!("\n[{prefix}: {preview}]"));
+                    self.status_bar.set_status("streaming...".to_string());
                 }
                 Ok(StreamChunk::Done) => {
                     self.finish_streaming();

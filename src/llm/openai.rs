@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use super::LlmProvider;
-use super::streaming::{check_http_error, stream_sse_response};
-use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk, TokenUsage};
+use super::streaming::{check_http_error, stream_sse_response, stream_sse_response_multi};
+use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk, ToolCall, ToolDefinition, TokenUsage};
 
 /// OpenAI-compatible provider. Works with OpenAI API, Azure, and any
 /// compatible endpoint (e.g., local servers with OpenAI-compatible API).
@@ -51,6 +51,8 @@ struct OpenAiRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<OpenAiTool>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,9 +61,42 @@ struct OpenAiStreamOptions {
 }
 
 #[derive(Debug, Serialize)]
+struct OpenAiTool {
+    #[serde(rename = "type")]
+    tool_type: String,
+    function: OpenAiFunction,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiFunction {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
 struct OpenAiMessage {
     role: String,
-    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OpenAiMessageToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiMessageToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    call_type: String,
+    function: OpenAiMessageFunction,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiMessageFunction {
+    name: String,
+    arguments: String,
 }
 
 /// SSE stream response chunk.
@@ -82,6 +117,26 @@ struct OpenAiStreamChoice {
 struct OpenAiDelta {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<OpenAiToolCallDelta>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiToolCallDelta {
+    #[serde(default)]
+    index: usize,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<OpenAiFunctionDelta>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiFunctionDelta {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,14 +156,69 @@ struct OpenAiErrorDetail {
     message: String,
 }
 
+fn convert_tool_definitions(tools: &Option<Vec<ToolDefinition>>) -> Option<Vec<OpenAiTool>> {
+    tools.as_ref().map(|tools| {
+        tools
+            .iter()
+            .map(|t| OpenAiTool {
+                tool_type: "function".to_string(),
+                function: OpenAiFunction {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    parameters: t.input_schema.clone(),
+                },
+            })
+            .collect()
+    })
+}
+
 impl From<&ChatRequest> for OpenAiRequest {
     fn from(req: &ChatRequest) -> Self {
         let messages = req
             .messages
             .iter()
-            .map(|m| OpenAiMessage {
-                role: m.role.as_str().to_string(),
-                content: m.content.clone(),
+            .map(|m| {
+                // Handle tool call messages (assistant requesting tools)
+                if let Some(tool_calls) = &m.tool_calls {
+                    return OpenAiMessage {
+                        role: "assistant".to_string(),
+                        content: if m.content.is_empty() {
+                            None
+                        } else {
+                            Some(m.content.clone())
+                        },
+                        tool_calls: Some(
+                            tool_calls
+                                .iter()
+                                .map(|tc| OpenAiMessageToolCall {
+                                    id: tc.id.clone(),
+                                    call_type: "function".to_string(),
+                                    function: OpenAiMessageFunction {
+                                        name: tc.name.clone(),
+                                        arguments: tc.arguments.clone(),
+                                    },
+                                })
+                                .collect(),
+                        ),
+                        tool_call_id: None,
+                    };
+                }
+                // Handle tool result messages
+                if let Some(tool_call_id) = &m.tool_call_id {
+                    return OpenAiMessage {
+                        role: "tool".to_string(),
+                        content: Some(m.content.clone()),
+                        tool_calls: None,
+                        tool_call_id: Some(tool_call_id.clone()),
+                    };
+                }
+                // Regular messages
+                OpenAiMessage {
+                    role: m.role.as_str().to_string(),
+                    content: Some(m.content.clone()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                }
             })
             .collect();
 
@@ -121,11 +231,60 @@ impl From<&ChatRequest> for OpenAiRequest {
             },
             temperature: req.temperature,
             max_tokens: req.max_tokens,
+            tools: convert_tool_definitions(&req.tools),
         }
     }
 }
 
+/// Accumulated state for tool call deltas during streaming.
+#[derive(Debug, Default)]
+struct ToolCallAccumulator {
+    calls: Vec<AccumulatedToolCall>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct AccumulatedToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+impl ToolCallAccumulator {
+    fn accumulate(&mut self, deltas: &[OpenAiToolCallDelta]) {
+        for delta in deltas {
+            // Grow the vec if needed
+            while self.calls.len() <= delta.index {
+                self.calls.push(AccumulatedToolCall::default());
+            }
+            let entry = &mut self.calls[delta.index];
+            if let Some(id) = &delta.id {
+                entry.id = id.clone();
+            }
+            if let Some(func) = &delta.function {
+                if let Some(name) = &func.name {
+                    entry.name = name.clone();
+                }
+                if let Some(args) = &func.arguments {
+                    entry.arguments.push_str(args);
+                }
+            }
+        }
+    }
+
+    fn into_tool_calls(self) -> Vec<ToolCall> {
+        self.calls
+            .into_iter()
+            .map(|c| ToolCall {
+                id: c.id,
+                name: c.name,
+                arguments: c.arguments,
+            })
+            .collect()
+    }
+}
+
 /// Parse a single SSE data line into a StreamChunk.
+/// Returns an additional flag indicating tool call deltas that need accumulation.
 fn parse_sse_line(line: &str) -> Option<StreamChunk> {
     let data = line.strip_prefix("data: ")?;
 
@@ -160,6 +319,64 @@ fn parse_sse_line(line: &str) -> Option<StreamChunk> {
     None
 }
 
+/// Parse an SSE line with tool call accumulation, returning multiple chunks if needed.
+fn parse_sse_line_with_tools(
+    line: &str,
+    accumulator: &mut ToolCallAccumulator,
+) -> Vec<StreamChunk> {
+    let Some(data) = line.strip_prefix("data: ") else {
+        return vec![];
+    };
+
+    if data.trim() == "[DONE]" {
+        return vec![StreamChunk::Done];
+    }
+
+    let chunk: OpenAiStreamChunk = match serde_json::from_str(data) {
+        Ok(c) => c,
+        Err(e) => return vec![StreamChunk::Error(format!("Failed to parse chunk: {e}"))],
+    };
+
+    if let Some(usage) = chunk.usage {
+        return vec![StreamChunk::Usage(TokenUsage::new(
+            usage.prompt_tokens,
+            usage.completion_tokens,
+        ))];
+    }
+
+    if let Some(choice) = chunk.choices.first() {
+        // Accumulate tool call deltas
+        if let Some(tool_calls) = &choice.delta.tool_calls {
+            accumulator.accumulate(tool_calls);
+        }
+
+        if let Some(ref content) = choice.delta.content
+            && !content.is_empty()
+        {
+            return vec![StreamChunk::Delta(content.clone())];
+        }
+
+        if choice.finish_reason.as_deref() == Some("tool_calls") {
+            let tool_calls = std::mem::take(accumulator);
+            return tool_calls
+                .into_tool_calls()
+                .into_iter()
+                .map(|tc| StreamChunk::ToolCallStart {
+                    id: tc.id,
+                    name: tc.name,
+                    arguments: tc.arguments,
+                })
+                .collect();
+        }
+
+        if choice.finish_reason.as_deref() == Some("stop") {
+            return vec![StreamChunk::Done];
+        }
+    }
+
+    vec![]
+}
+
 #[async_trait]
 impl LlmProvider for OpenAiProvider {
     fn name(&self) -> &str {
@@ -175,6 +392,7 @@ impl LlmProvider for OpenAiProvider {
         request: ChatRequest,
         tx: mpsc::UnboundedSender<StreamChunk>,
     ) -> Result<(), LlmError> {
+        let has_tools = request.tools.is_some();
         let body = OpenAiRequest::from(&request);
         let url = self.chat_url();
 
@@ -197,7 +415,18 @@ impl LlmProvider for OpenAiProvider {
         })
         .await?;
 
-        stream_sse_response(response, &tx, parse_sse_line, |_| false).await
+        if has_tools {
+            let mut accumulator = ToolCallAccumulator::default();
+            stream_sse_response_multi(
+                response,
+                &tx,
+                move |line| parse_sse_line_with_tools(line, &mut accumulator),
+                |_| false,
+            )
+            .await
+        } else {
+            stream_sse_response(response, &tx, parse_sse_line, |_| false).await
+        }
     }
 }
 
@@ -271,9 +500,9 @@ mod tests {
         assert!(openai_req.stream);
         assert_eq!(openai_req.messages.len(), 2);
         assert_eq!(openai_req.messages[0].role, "system");
-        assert_eq!(openai_req.messages[0].content, "be helpful");
+        assert_eq!(openai_req.messages[0].content.as_deref(), Some("be helpful"));
         assert_eq!(openai_req.messages[1].role, "user");
-        assert_eq!(openai_req.messages[1].content, "hello");
+        assert_eq!(openai_req.messages[1].content.as_deref(), Some("hello"));
         assert_eq!(openai_req.temperature, Some(0.7));
         assert_eq!(openai_req.max_tokens, Some(500));
     }
@@ -288,6 +517,74 @@ mod tests {
         assert_eq!(json["stream"], true);
         assert!(json.get("temperature").is_none()); // skipped when None
         assert!(json.get("max_tokens").is_none());
+        assert!(json.get("tools").is_none()); // skipped when None
+    }
+
+    #[test]
+    fn openai_request_with_tools() {
+        let tools = vec![super::super::types::ToolDefinition {
+            name: "read_file".to_string(),
+            description: "Read a file".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+        }];
+        let chat_req = ChatRequest::new("gpt-4o", vec![Message::user("hi")]).with_tools(tools);
+        let openai_req = OpenAiRequest::from(&chat_req);
+        let json = serde_json::to_value(&openai_req).unwrap();
+
+        assert!(json.get("tools").is_some());
+        let tools = json["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["type"], "function");
+        assert_eq!(tools[0]["function"]["name"], "read_file");
+    }
+
+    #[test]
+    fn openai_request_with_tool_messages() {
+        let tool_calls = vec![super::super::types::ToolCall {
+            id: "call_123".to_string(),
+            name: "read_file".to_string(),
+            arguments: r#"{"path":"/tmp/test"}"#.to_string(),
+        }];
+        let messages = vec![
+            Message::user("read the file"),
+            Message::tool_use(tool_calls),
+            Message::tool_result("call_123", "file contents"),
+        ];
+        let chat_req = ChatRequest::new("gpt-4o", messages);
+        let openai_req = OpenAiRequest::from(&chat_req);
+
+        assert_eq!(openai_req.messages.len(), 3);
+        assert_eq!(openai_req.messages[1].role, "assistant");
+        assert!(openai_req.messages[1].tool_calls.is_some());
+        assert_eq!(openai_req.messages[2].role, "tool");
+        assert_eq!(openai_req.messages[2].tool_call_id.as_deref(), Some("call_123"));
+    }
+
+    #[test]
+    fn tool_call_accumulator_basic() {
+        let mut acc = ToolCallAccumulator::default();
+        acc.accumulate(&[OpenAiToolCallDelta {
+            index: 0,
+            id: Some("call_1".to_string()),
+            function: Some(OpenAiFunctionDelta {
+                name: Some("read_file".to_string()),
+                arguments: Some(r#"{"pa"#.to_string()),
+            }),
+        }]);
+        acc.accumulate(&[OpenAiToolCallDelta {
+            index: 0,
+            id: None,
+            function: Some(OpenAiFunctionDelta {
+                name: None,
+                arguments: Some(r#"th":"/"}"#.to_string()),
+            }),
+        }]);
+
+        let calls = acc.into_tool_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].arguments, r#"{"path":"/"}"#);
     }
 
     #[test]

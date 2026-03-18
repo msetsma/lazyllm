@@ -35,6 +35,7 @@ async fn collect_stream(rx: &mut mpsc::UnboundedReceiver<StreamChunk>) -> String
             StreamChunk::Done => break,
             StreamChunk::Usage(_) => {}
             StreamChunk::Error(e) => panic!("Unexpected error: {e}"),
+            _ => {}
         }
     }
     text
@@ -240,6 +241,7 @@ async fn streaming_error_event_is_propagated() {
             }
             StreamChunk::Usage(_) => {}
             StreamChunk::Done => break,
+            _ => {}
         }
     }
     assert!(got_delta, "should have received partial delta");

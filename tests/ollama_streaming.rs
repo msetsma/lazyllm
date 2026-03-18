@@ -31,6 +31,7 @@ async fn collect_stream(rx: &mut mpsc::UnboundedReceiver<StreamChunk>) -> String
             StreamChunk::Done => break,
             StreamChunk::Usage(_) => {}
             StreamChunk::Error(e) => panic!("Unexpected error: {e}"),
+            _ => {}
         }
     }
     text

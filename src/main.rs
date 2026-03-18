@@ -53,6 +53,9 @@ async fn main() -> Result<()> {
     // Initialize app
     let mut app = App::new(config, registry).with_store(store);
 
+    // Initialize MCP servers
+    app.init_mcp().await;
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -78,6 +81,9 @@ async fn main() -> Result<()> {
             app.update(action).await;
         }
     }
+
+    // Shut down MCP servers
+    app.shutdown_mcp().await;
 
     // Restore terminal
     disable_raw_mode()?;

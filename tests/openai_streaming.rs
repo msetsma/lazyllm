@@ -66,6 +66,7 @@ async fn streaming_collects_full_response() {
             StreamChunk::Done => break,
             StreamChunk::Usage(_) => {}
             StreamChunk::Error(e) => panic!("Unexpected error: {e}"),
+            _ => {}
         }
     }
 
