@@ -8,6 +8,8 @@ pub enum Command {
     DeleteChat,
     Help,
     Clear,
+    /// Set or clear the active context. None = clear, Some(name) = activate.
+    Context(Option<String>),
     Unknown(String),
 }
 
@@ -33,6 +35,11 @@ pub fn parse_command(input: &str) -> Command {
         "delete" | "del" => Command::DeleteChat,
         "help" => Command::Help,
         "clear" => Command::Clear,
+        "context" | "ctx" => match arg {
+            Some(a) if a == "none" || a == "clear" => Command::Context(None),
+            Some(a) if !a.is_empty() => Command::Context(Some(a.to_string())),
+            _ => Command::Context(None),
+        },
         other => Command::Unknown(other.to_string()),
     }
 }
@@ -98,6 +105,26 @@ mod tests {
     #[test]
     fn parse_clear() {
         assert_eq!(parse_command("clear"), Command::Clear);
+    }
+
+    #[test]
+    fn parse_context_with_name() {
+        assert_eq!(
+            parse_command("context rust-dev"),
+            Command::Context(Some("rust-dev".to_string()))
+        );
+        assert_eq!(
+            parse_command("ctx rust-dev"),
+            Command::Context(Some("rust-dev".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_context_clear() {
+        assert_eq!(parse_command("context none"), Command::Context(None));
+        assert_eq!(parse_command("context clear"), Command::Context(None));
+        assert_eq!(parse_command("context"), Command::Context(None));
+        assert_eq!(parse_command("ctx"), Command::Context(None));
     }
 
     #[test]

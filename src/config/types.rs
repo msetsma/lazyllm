@@ -25,6 +25,10 @@ pub struct GeneralConfig {
     pub save_conversations: bool,
     #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
+    #[serde(default)]
+    pub default_context: Option<String>,
+    #[serde(default = "default_contexts_dir")]
+    pub contexts_dir: PathBuf,
 }
 
 impl Default for GeneralConfig {
@@ -34,6 +38,8 @@ impl Default for GeneralConfig {
             default_model: default_model(),
             save_conversations: true,
             data_dir: default_data_dir(),
+            default_context: None,
+            contexts_dir: default_contexts_dir(),
         }
     }
 }
@@ -114,6 +120,13 @@ fn default_data_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("lazyllm")
+}
+
+fn default_contexts_dir() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from(".config"))
+        .join("lazyllm")
+        .join("contexts")
 }
 
 fn default_true() -> bool {

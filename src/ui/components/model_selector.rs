@@ -15,6 +15,7 @@ pub struct ModelSelector {
     pub(crate) provider: String,
     pub(crate) model: String,
     pub(crate) mcp_server_count: usize,
+    pub(crate) context_name: Option<String>,
 }
 
 impl ModelSelector {
@@ -23,6 +24,7 @@ impl ModelSelector {
             provider,
             model,
             mcp_server_count: 0,
+            context_name: None,
         }
     }
 
@@ -31,6 +33,7 @@ impl ModelSelector {
             provider: self.provider.clone(),
             model: self.model.clone(),
             mcp_server_count: count,
+            context_name: self.context_name.clone(),
         }
     }
 }
@@ -41,7 +44,7 @@ impl Component for ModelSelector {
     }
 
     fn render(&self, frame: &mut Frame, area: Rect, _focused: bool, theme: &Theme) {
-        let line = Line::from(vec![
+        let mut spans = vec![
             Span::styled(" Model: ", Style::default().fg(theme.label)),
             Span::styled(
                 &self.model,
@@ -59,7 +62,19 @@ impl Component for ModelSelector {
                 format!("{} servers", self.mcp_server_count),
                 Style::default().fg(theme.mcp_count),
             ),
-        ]);
+        ];
+
+        if let Some(ref ctx) = self.context_name {
+            spans.push(Span::styled("  Context: ", Style::default().fg(theme.label)));
+            spans.push(Span::styled(
+                ctx,
+                Style::default()
+                    .fg(theme.highlight)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        let line = Line::from(spans);
 
         let paragraph = Paragraph::new(line).block(
             Block::default()

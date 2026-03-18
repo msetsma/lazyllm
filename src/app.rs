@@ -5,6 +5,7 @@ use base64::Engine;
 use tokio::sync::mpsc;
 
 use crate::config::types::AppConfig;
+use crate::context::Context;
 use crate::conversation::ConversationManager;
 use crate::event::types::{Action, FocusTarget, Mode};
 use crate::llm::ProviderRegistry;
@@ -38,6 +39,10 @@ pub struct App {
 
     // MCP
     pub(crate) mcp_manager: Option<Arc<McpManager>>,
+
+    // Contexts
+    pub(crate) contexts: std::collections::HashMap<String, Context>,
+    pub(crate) active_context: Option<String>,
 
     // Token usage
     pub(crate) last_usage: Option<TokenUsage>,
@@ -88,6 +93,21 @@ impl App {
         let mut chat_view = ChatView::new();
         chat_view.set_show_timestamps(config.ui.show_timestamps);
 
+        // Load contexts from disk
+        let contexts = crate::context::load_contexts(&config.general.contexts_dir);
+        let active_context = config
+            .general
+            .default_context
+            .clone()
+            .filter(|name| contexts.contains_key(name));
+
+        if !contexts.is_empty() {
+            tracing::info!("Loaded {} context(s)", contexts.len());
+        }
+
+        let mut ms = model_selector;
+        ms.context_name = active_context.clone();
+
         Self {
             mode: Mode::Normal,
             focus: FocusTarget::default(),
@@ -98,13 +118,15 @@ impl App {
             registry: Arc::new(registry),
             stream_rx: None,
             mcp_manager: None,
+            contexts,
+            active_context,
             last_usage: None,
             session_usage: TokenUsage::default(),
             conversations: ConversationManager::new(),
             chat_list: ChatList::new(),
             chat_view,
             input_box: InputBox::new(),
-            model_selector,
+            model_selector: ms,
             status_bar: StatusBar::new(),
             tool_panel: ToolPanel::new(),
             help_overlay: HelpOverlay::new(),
@@ -159,8 +181,12 @@ impl App {
                 // Restore the model/provider from the conversation
                 self.config.general.default_provider = conv.provider.clone();
                 self.config.general.default_model = conv.model.clone();
-                self.model_selector =
-                    ModelSelector::new(conv.provider.clone(), conv.model.clone());
+                let mut ms = ModelSelector::new(conv.provider.clone(), conv.model.clone());
+
+                // Restore context from conversation
+                self.active_context = conv.context_name.clone();
+                ms.context_name = conv.context_name.clone();
+                self.model_selector = ms;
 
                 let mut view = ChatView::from_messages(&conv.messages);
                 view.set_show_timestamps(self.config.ui.show_timestamps);
@@ -177,6 +203,14 @@ impl App {
         let provider = self.config.general.default_provider.clone();
         let model = self.config.general.default_model.clone();
         let (_id, title) = self.conversations.create_new_conversation(provider, model);
+
+        // Apply active context to the new conversation
+        if let Some(ref ctx_name) = self.active_context {
+            if let Some(conv) = &mut self.conversations.active_conversation {
+                conv.context_name = Some(ctx_name.clone());
+            }
+        }
+
         let mut view = ChatView::new();
         view.set_show_timestamps(self.config.ui.show_timestamps);
         self.chat_view = view;
@@ -417,6 +451,37 @@ impl App {
                 }
                 self.save_active_conversation();
             }
+            Command::Context(Some(name)) => {
+                if self.contexts.contains_key(&name) {
+                    self.active_context = Some(name.clone());
+                    self.model_selector.context_name = Some(name.clone());
+                    if let Some(conv) = &mut self.conversations.active_conversation {
+                        conv.context_name = Some(name.clone());
+                    }
+                    self.status_bar
+                        .set_status(format!("Context: {name}"));
+                } else {
+                    let available: Vec<_> = self.contexts.keys().cloned().collect();
+                    if available.is_empty() {
+                        self.status_bar.set_status(
+                            "No contexts found. Add .toml files to contexts dir.".to_string(),
+                        );
+                    } else {
+                        self.status_bar.set_status(format!(
+                            "Unknown context: {name}. Available: {}",
+                            available.join(", ")
+                        ));
+                    }
+                }
+            }
+            Command::Context(None) => {
+                self.active_context = None;
+                self.model_selector.context_name = None;
+                if let Some(conv) = &mut self.conversations.active_conversation {
+                    conv.context_name = None;
+                }
+                self.status_bar.set_status("Context cleared".to_string());
+            }
             Command::Unknown(cmd) => {
                 self.status_bar
                     .set_status(format!("Unknown command: {cmd}"));
@@ -453,7 +518,9 @@ impl App {
     fn set_active_model(&mut self, provider: String, model: String) {
         self.config.general.default_provider = provider.clone();
         self.config.general.default_model = model.clone();
-        self.model_selector = ModelSelector::new(provider.clone(), model.clone());
+        let mut ms = ModelSelector::new(provider.clone(), model.clone());
+        ms.context_name = self.active_context.clone();
+        self.model_selector = ms;
 
         // Update the active conversation's model/provider
         if let Some(conv) = &mut self.conversations.active_conversation {
@@ -496,7 +563,15 @@ impl App {
         };
 
         let model = self.config.general.default_model.clone();
-        let messages = self.messages().to_vec();
+
+        // Prepend context messages if a context is active
+        let mut messages = Vec::new();
+        if let Some(ref ctx_name) = self.active_context {
+            if let Some(ctx) = self.contexts.get(ctx_name) {
+                messages.extend(ctx.build_messages());
+            }
+        }
+        messages.extend(self.messages().iter().cloned());
 
         // Attach MCP tools to the request if available
         let tool_defs = self

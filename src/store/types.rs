@@ -14,6 +14,8 @@ pub struct Conversation {
     pub provider: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_name: Option<String>,
 }
 
 impl Conversation {
@@ -27,6 +29,7 @@ impl Conversation {
             provider,
             created_at: now,
             updated_at: now,
+            context_name: None,
         }
     }
 
