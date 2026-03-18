@@ -84,10 +84,10 @@ impl Component for InputBox {
         let border_style = super::focused_border_style(focused, theme);
         let mode_label = self.mode.label();
 
-        let display_text = if self.mode == Mode::Command {
-            format!(":{}", self.content)
-        } else {
-            self.content.clone()
+        let display_text = match self.mode {
+            Mode::Command => format!(":{}", self.content),
+            Mode::Search => format!("/{}", self.content),
+            _ => self.content.clone(),
         };
 
         let paragraph = Paragraph::new(display_text).block(
@@ -99,9 +99,17 @@ impl Component for InputBox {
 
         frame.render_widget(paragraph, area);
 
-        // Show cursor when in insert or command mode
-        if focused && (self.mode == Mode::Insert || self.mode == Mode::Command) {
-            let cursor_offset = if self.mode == Mode::Command { 1 } else { 0 };
+        // Show cursor when in insert, command, or search mode
+        if focused
+            && (self.mode == Mode::Insert
+                || self.mode == Mode::Command
+                || self.mode == Mode::Search)
+        {
+            let cursor_offset = if self.mode == Mode::Command || self.mode == Mode::Search {
+                1
+            } else {
+                0
+            };
             let x = area.x + 1 + cursor_offset + self.cursor_pos as u16;
             let y = area.y + 1;
             if x < area.x + area.width - 1 {

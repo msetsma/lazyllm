@@ -267,10 +267,15 @@ impl App {
                 self.running = false;
             }
             Action::SwitchMode(mode) => {
+                // Exiting search mode: clear search state
+                if self.mode == Mode::Search && mode != Mode::Search {
+                    self.chat_view.clear_search();
+                    self.input_box.take_content();
+                }
                 self.mode = mode;
                 self.input_box.handle_action(&Action::SwitchMode(mode));
                 self.status_bar.handle_action(&Action::SwitchMode(mode));
-                if mode == Mode::Insert || mode == Mode::Command {
+                if mode == Mode::Insert || mode == Mode::Command || mode == Mode::Search {
                     self.focus = FocusTarget::Input;
                 }
             }
@@ -320,6 +325,18 @@ impl App {
             }
             Action::InsertChar(_) | Action::DeleteChar => {
                 self.input_box.handle_action(&action);
+                if self.mode == Mode::Search {
+                    let query = self.input_box.content.clone();
+                    self.chat_view.set_search_query(query);
+                    if let Some((current, total)) = self.chat_view.search_status() {
+                        self.status_bar
+                            .set_status(format!("{current}/{total} matches"));
+                    } else if !self.input_box.content.is_empty() {
+                        self.status_bar.set_status("No matches".to_string());
+                    } else {
+                        self.status_bar.status_message = None;
+                    }
+                }
             }
             Action::ScrollUp | Action::ScrollDown => {
                 self.dispatch_to_focused(&action);
@@ -364,6 +381,18 @@ impl App {
             }
             Action::CopySelection => {
                 self.copy_last_response();
+            }
+            Action::SearchNext => {
+                if let Some((current, total)) = self.chat_view.search_next() {
+                    self.status_bar
+                        .set_status(format!("{current}/{total} matches"));
+                }
+            }
+            Action::SearchPrev => {
+                if let Some((current, total)) = self.chat_view.search_prev() {
+                    self.status_bar
+                        .set_status(format!("{current}/{total} matches"));
+                }
             }
             Action::Tick => {
                 self.drain_stream_chunks();

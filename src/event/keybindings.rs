@@ -17,6 +17,7 @@ pub fn resolve_key(key: KeyEvent, mode: Mode, focus: FocusTarget) -> Action {
         Mode::Normal => resolve_normal_mode(key, focus),
         Mode::Visual => resolve_visual_mode(key),
         Mode::Command => resolve_command_mode(key),
+        Mode::Search => resolve_search_mode(key),
     }
 }
 
@@ -36,6 +37,7 @@ fn resolve_normal_mode(key: KeyEvent, _focus: FocusTarget) -> Action {
         KeyCode::Char('i') => Action::SwitchMode(Mode::Insert),
         KeyCode::Char('v') => Action::SwitchMode(Mode::Visual),
         KeyCode::Char(':') => Action::SwitchMode(Mode::Command),
+        KeyCode::Char('/') => Action::SwitchMode(Mode::Search),
         KeyCode::Tab => Action::FocusNext,
         KeyCode::BackTab => Action::FocusPrev,
         KeyCode::Char('j') | KeyCode::Down => Action::ScrollDown,
@@ -47,6 +49,18 @@ fn resolve_normal_mode(key: KeyEvent, _focus: FocusTarget) -> Action {
         KeyCode::Char('?') => Action::ToggleHelp,
         KeyCode::Char('l') | KeyCode::Right => Action::FocusNext,
         KeyCode::Char('h') | KeyCode::Left => Action::FocusPrev,
+        _ => Action::None,
+    }
+}
+
+fn resolve_search_mode(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => Action::SwitchMode(Mode::Normal),
+        KeyCode::Enter => Action::SearchNext,
+        KeyCode::Backspace => Action::DeleteChar,
+        KeyCode::Char(c) => Action::InsertChar(c),
+        KeyCode::Down => Action::SearchNext,
+        KeyCode::Up => Action::SearchPrev,
         _ => Action::None,
     }
 }

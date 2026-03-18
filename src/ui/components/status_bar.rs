@@ -40,10 +40,11 @@ impl StatusBar {
 
     fn hint_text(&self) -> &str {
         match self.mode {
-            Mode::Normal => "q:quit  i:insert  Tab:focus  j/k:scroll  ?:help",
+            Mode::Normal => "q:quit  i:insert  /:search  Tab:focus  j/k:scroll  ?:help",
             Mode::Insert => "Esc:normal  Enter:send  type to compose",
             Mode::Visual => "Esc:normal  j/k:scroll  y:copy",
             Mode::Command => "Esc:cancel  Enter:execute",
+            Mode::Search => "Esc:exit  Enter:next  Up/Down:prev/next  type to search",
         }
     }
 }
@@ -65,6 +66,7 @@ impl Component for StatusBar {
             Mode::Insert => (theme.mode_insert_bg, theme.mode_insert_fg),
             Mode::Visual => (theme.mode_visual_bg, theme.mode_visual_fg),
             Mode::Command => (theme.mode_command_bg, theme.mode_command_fg),
+            Mode::Search => (theme.highlight, theme.mode_normal_fg),
         };
 
         let mut spans = vec![

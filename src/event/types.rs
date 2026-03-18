@@ -20,6 +20,8 @@ pub enum Action {
     ToggleModelSelector,
     SelectModel,
     CopySelection,
+    SearchNext,
+    SearchPrev,
     Resize(u16, u16),
     Tick,
     None,
@@ -33,6 +35,7 @@ pub enum Mode {
     Insert,
     Visual,
     Command,
+    Search,
 }
 
 impl Mode {
@@ -42,6 +45,7 @@ impl Mode {
             Mode::Insert => "INSERT",
             Mode::Visual => "VISUAL",
             Mode::Command => "COMMAND",
+            Mode::Search => "SEARCH",
         }
     }
 }

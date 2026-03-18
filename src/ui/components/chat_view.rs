@@ -1,6 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
@@ -39,12 +39,22 @@ pub struct ChatMessage {
     pub timestamp: Option<chrono::DateTime<chrono::Local>>,
 }
 
+/// A match position in the conversation: (message index, byte offset in content).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchMatch {
+    pub message_idx: usize,
+    pub byte_offset: usize,
+}
+
 /// Center panel showing the conversation messages.
 #[derive(Debug, Clone)]
 pub struct ChatView {
     pub(crate) messages: Vec<ChatMessage>,
     pub(crate) scroll_offset: u16,
     pub(crate) show_timestamps: bool,
+    pub(crate) search_query: String,
+    pub(crate) search_matches: Vec<SearchMatch>,
+    pub(crate) search_current: usize,
 }
 
 impl Default for ChatView {
@@ -59,6 +69,9 @@ impl ChatView {
             messages: Vec::new(),
             scroll_offset: 0,
             show_timestamps: false,
+            search_query: String::new(),
+            search_matches: Vec::new(),
+            search_current: 0,
         }
     }
 
@@ -103,11 +116,81 @@ impl ChatView {
         self.scroll_offset = self.scroll_offset.saturating_sub(1);
     }
 
+    /// Update the search query and recompute matches (case-insensitive).
+    pub fn set_search_query(&mut self, query: String) {
+        self.search_query = query;
+        self.recompute_matches();
+    }
+
+    /// Clear the search state.
+    pub fn clear_search(&mut self) {
+        self.search_query.clear();
+        self.search_matches.clear();
+        self.search_current = 0;
+    }
+
+    /// Move to the next match. Returns the match info for status display.
+    pub fn search_next(&mut self) -> Option<(usize, usize)> {
+        if self.search_matches.is_empty() {
+            return None;
+        }
+        self.search_current = (self.search_current + 1) % self.search_matches.len();
+        Some((self.search_current + 1, self.search_matches.len()))
+    }
+
+    /// Move to the previous match. Returns the match info for status display.
+    pub fn search_prev(&mut self) -> Option<(usize, usize)> {
+        if self.search_matches.is_empty() {
+            return None;
+        }
+        if self.search_current == 0 {
+            self.search_current = self.search_matches.len() - 1;
+        } else {
+            self.search_current -= 1;
+        }
+        Some((self.search_current + 1, self.search_matches.len()))
+    }
+
+    /// Current search status: (current_match_1_indexed, total_matches).
+    pub fn search_status(&self) -> Option<(usize, usize)> {
+        if self.search_matches.is_empty() {
+            return None;
+        }
+        Some((self.search_current + 1, self.search_matches.len()))
+    }
+
+    fn recompute_matches(&mut self) {
+        self.search_matches.clear();
+        self.search_current = 0;
+
+        if self.search_query.is_empty() {
+            return;
+        }
+
+        let query_lower = self.search_query.to_lowercase();
+        for (msg_idx, msg) in self.messages.iter().enumerate() {
+            let content_lower = msg.content.to_lowercase();
+            let mut start = 0;
+            while let Some(pos) = content_lower[start..].find(&query_lower) {
+                self.search_matches.push(SearchMatch {
+                    message_idx: msg_idx,
+                    byte_offset: start + pos,
+                });
+                start += pos + query_lower.len();
+            }
+        }
+    }
+
     /// Build all lines for rendering, using markdown for assistant messages.
     fn build_lines(&self, theme: &Theme) -> Vec<Line<'_>> {
         let mut lines = Vec::new();
+        let highlight_style = Style::default()
+            .bg(theme.highlight)
+            .fg(ratatui::style::Color::Black)
+            .add_modifier(Modifier::BOLD);
+        let has_search = !self.search_query.is_empty();
 
-        for msg in &self.messages {
+        for (msg_idx, msg) in self.messages.iter().enumerate() {
             let (label, color) = match msg.role {
                 MessageRole::User => ("You", theme.user_label),
                 MessageRole::Assistant => ("Assistant", theme.assistant_label),
@@ -123,7 +206,7 @@ impl ChatView {
                             format!("{label}:"),
                             Style::default()
                                 .fg(color)
-                                .add_modifier(ratatui::style::Modifier::BOLD),
+                                .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
                             format!("  {ts_str}"),
@@ -138,21 +221,24 @@ impl ChatView {
             }
 
             // Message content
-            match msg.role {
+            let content_lines: Vec<Line<'_>> = match msg.role {
                 MessageRole::Assistant => {
-                    // Render markdown for assistant responses
                     let rendered = markdown::render_markdown(&msg.content);
-                    for line in rendered.lines {
-                        lines.push(line.to_owned());
-                    }
+                    rendered.lines.into_iter().map(|l| l.to_owned()).collect()
                 }
                 MessageRole::User | MessageRole::System => {
-                    // Plain text for user and system messages
                     let rendered = markdown::render_plain(&msg.content);
-                    for line in rendered.lines {
-                        lines.push(line);
-                    }
+                    rendered.lines.into_iter().collect()
                 }
+            };
+
+            // Apply search highlighting if active
+            if has_search && self.matches_in_message(msg_idx) {
+                for line in content_lines {
+                    lines.push(self.highlight_line(line, highlight_style));
+                }
+            } else {
+                lines.extend(content_lines);
             }
 
             // Separator between messages
@@ -162,6 +248,58 @@ impl ChatView {
         }
 
         lines
+    }
+
+    /// Check if any search matches exist in a given message.
+    fn matches_in_message(&self, msg_idx: usize) -> bool {
+        self.search_matches.iter().any(|m| m.message_idx == msg_idx)
+    }
+
+    /// Highlight occurrences of the search query within a line's spans.
+    fn highlight_line<'a>(&self, line: Line<'a>, highlight_style: Style) -> Line<'a> {
+        if self.search_query.is_empty() {
+            return line;
+        }
+
+        let query_lower = self.search_query.to_lowercase();
+        let mut new_spans: Vec<Span<'a>> = Vec::new();
+
+        for span in line.spans {
+            let text = span.content.to_string();
+            let text_lower = text.to_lowercase();
+
+            if !text_lower.contains(&query_lower) {
+                new_spans.push(span);
+                continue;
+            }
+
+            let base_style = span.style;
+            let mut pos = 0;
+            while pos < text.len() {
+                if let Some(match_pos) = text_lower[pos..].find(&query_lower) {
+                    let abs_pos = pos + match_pos;
+                    // Text before match
+                    if abs_pos > pos {
+                        new_spans.push(Span::styled(
+                            text[pos..abs_pos].to_string(),
+                            base_style,
+                        ));
+                    }
+                    // The match itself
+                    new_spans.push(Span::styled(
+                        text[abs_pos..abs_pos + query_lower.len()].to_string(),
+                        highlight_style,
+                    ));
+                    pos = abs_pos + query_lower.len();
+                } else {
+                    // Remainder
+                    new_spans.push(Span::styled(text[pos..].to_string(), base_style));
+                    break;
+                }
+            }
+        }
+
+        Line::from(new_spans)
     }
 }
 
@@ -275,11 +413,8 @@ mod tests {
 
     #[test]
     fn scroll_down_decrements_offset() {
-        let mut view = ChatView {
-            messages: vec![],
-            scroll_offset: 3,
-            show_timestamps: false,
-        };
+        let mut view = ChatView::new();
+        view.scroll_offset = 3;
         view.scroll_down();
         assert_eq!(view.scroll_offset, 2);
     }
@@ -465,5 +600,78 @@ mod tests {
         assert!(!view.show_timestamps);
         view.set_show_timestamps(true);
         assert!(view.show_timestamps);
+    }
+
+    #[test]
+    fn search_finds_matches_case_insensitive() {
+        let mut view = ChatView::new();
+        view.add_message(chat_msg(MessageRole::User, "Hello World"));
+        view.add_message(chat_msg(MessageRole::Assistant, "hello there"));
+        view.set_search_query("hello".to_string());
+        assert_eq!(view.search_matches.len(), 2);
+    }
+
+    #[test]
+    fn search_no_matches() {
+        let mut view = ChatView::new();
+        view.add_message(chat_msg(MessageRole::User, "Hello"));
+        view.set_search_query("xyz".to_string());
+        assert!(view.search_matches.is_empty());
+        assert!(view.search_status().is_none());
+    }
+
+    #[test]
+    fn search_next_cycles() {
+        let mut view = ChatView::new();
+        view.add_message(chat_msg(MessageRole::User, "foo foo foo"));
+        view.set_search_query("foo".to_string());
+        assert_eq!(view.search_matches.len(), 3);
+        assert_eq!(view.search_status(), Some((1, 3)));
+
+        assert_eq!(view.search_next(), Some((2, 3)));
+        assert_eq!(view.search_next(), Some((3, 3)));
+        assert_eq!(view.search_next(), Some((1, 3))); // wraps
+    }
+
+    #[test]
+    fn search_prev_cycles() {
+        let mut view = ChatView::new();
+        view.add_message(chat_msg(MessageRole::User, "foo foo"));
+        view.set_search_query("foo".to_string());
+        assert_eq!(view.search_prev(), Some((2, 2))); // wraps to last
+        assert_eq!(view.search_prev(), Some((1, 2)));
+    }
+
+    #[test]
+    fn clear_search_resets_state() {
+        let mut view = ChatView::new();
+        view.add_message(chat_msg(MessageRole::User, "test"));
+        view.set_search_query("test".to_string());
+        assert_eq!(view.search_matches.len(), 1);
+        view.clear_search();
+        assert!(view.search_query.is_empty());
+        assert!(view.search_matches.is_empty());
+    }
+
+    #[test]
+    fn search_multiple_matches_per_message() {
+        let mut view = ChatView::new();
+        view.add_message(chat_msg(MessageRole::User, "ab ab ab"));
+        view.set_search_query("ab".to_string());
+        assert_eq!(view.search_matches.len(), 3);
+        assert_eq!(view.search_matches[0].byte_offset, 0);
+        assert_eq!(view.search_matches[1].byte_offset, 3);
+        assert_eq!(view.search_matches[2].byte_offset, 6);
+    }
+
+    #[test]
+    fn search_across_multiple_messages() {
+        let mut view = ChatView::new();
+        view.add_message(chat_msg(MessageRole::User, "hello world"));
+        view.add_message(chat_msg(MessageRole::Assistant, "Hello again"));
+        view.set_search_query("hello".to_string());
+        assert_eq!(view.search_matches.len(), 2);
+        assert_eq!(view.search_matches[0].message_idx, 0);
+        assert_eq!(view.search_matches[1].message_idx, 1);
     }
 }
