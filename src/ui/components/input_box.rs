@@ -1,18 +1,18 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::event::types::{Action, Mode};
+use crate::ui::theme::Theme;
 
 use super::Component;
 
 /// Text input component for typing messages.
 #[derive(Debug, Clone, Default)]
 pub struct InputBox {
-    pub content: String,
-    pub cursor_pos: usize,
-    pub mode: Mode,
+    pub(crate) content: String,
+    pub(crate) cursor_pos: usize,
+    pub(crate) mode: Mode,
 }
 
 impl InputBox {
@@ -20,49 +20,31 @@ impl InputBox {
         Self::default()
     }
 
-    pub fn insert_char(&self, c: char) -> Self {
-        let mut content = self.content.clone();
+    pub fn insert_char(&mut self, c: char) {
         let byte_pos = self.byte_position();
-        content.insert(byte_pos, c);
-        Self {
-            content,
-            cursor_pos: self.cursor_pos + 1,
-            mode: self.mode,
-        }
+        self.content.insert(byte_pos, c);
+        self.cursor_pos += 1;
     }
 
-    pub fn delete_char(&self) -> Self {
+    pub fn delete_char(&mut self) {
         if self.cursor_pos == 0 {
-            return self.clone();
+            return;
         }
-        let mut content = self.content.clone();
         let new_cursor = self.cursor_pos - 1;
         let byte_pos = self.byte_position_at(new_cursor);
         let next_byte = self.byte_position();
-        content.replace_range(byte_pos..next_byte, "");
-        Self {
-            content,
-            cursor_pos: new_cursor,
-            mode: self.mode,
-        }
+        self.content.replace_range(byte_pos..next_byte, "");
+        self.cursor_pos = new_cursor;
     }
 
-    pub fn take_content(&self) -> (Self, String) {
-        let content = self.content.clone();
-        let cleared = Self {
-            content: String::new(),
-            cursor_pos: 0,
-            mode: self.mode,
-        };
-        (cleared, content)
+    pub fn take_content(&mut self) -> String {
+        let content = std::mem::take(&mut self.content);
+        self.cursor_pos = 0;
+        content
     }
 
-    pub fn set_mode(&self, mode: Mode) -> Self {
-        Self {
-            content: self.content.clone(),
-            cursor_pos: self.cursor_pos,
-            mode,
-        }
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
     }
 
     /// Convert char position to byte position in the string.
@@ -83,37 +65,44 @@ impl Component for InputBox {
     fn handle_action(&mut self, action: &Action) -> Option<Action> {
         match action {
             Action::InsertChar(c) => {
-                *self = self.insert_char(*c);
+                self.insert_char(*c);
                 None
             }
             Action::DeleteChar => {
-                *self = self.delete_char();
+                self.delete_char();
                 None
             }
             Action::SwitchMode(mode) => {
-                *self = self.set_mode(*mode);
+                self.set_mode(*mode);
                 None
             }
             _ => None,
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
-        let border_color = if focused { Color::Cyan } else { Color::DarkGray };
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
+        let border_style = super::focused_border_style(focused, theme);
         let mode_label = self.mode.label();
 
-        let paragraph = Paragraph::new(self.content.as_str()).block(
+        let display_text = if self.mode == Mode::Command {
+            format!(":{}", self.content)
+        } else {
+            self.content.clone()
+        };
+
+        let paragraph = Paragraph::new(display_text).block(
             Block::default()
                 .title(format!(" Input [{mode_label}] "))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color)),
+                .border_style(border_style),
         );
 
         frame.render_widget(paragraph, area);
 
-        // Show cursor when in insert mode
-        if focused && self.mode == Mode::Insert {
-            let x = area.x + 1 + self.cursor_pos as u16;
+        // Show cursor when in insert or command mode
+        if focused && (self.mode == Mode::Insert || self.mode == Mode::Command) {
+            let cursor_offset = if self.mode == Mode::Command { 1 } else { 0 };
+            let x = area.x + 1 + cursor_offset + self.cursor_pos as u16;
             let y = area.y + 1;
             if x < area.x + area.width - 1 {
                 frame.set_cursor_position((x, y));
@@ -135,67 +124,65 @@ mod tests {
     }
 
     #[test]
-    fn insert_char_returns_new_state() {
-        let input = InputBox::new();
-        let updated = input.insert_char('h');
-        assert_eq!(updated.content, "h");
-        assert_eq!(updated.cursor_pos, 1);
-        // Original unchanged
-        assert!(input.content.is_empty());
+    fn insert_char_mutates_in_place() {
+        let mut input = InputBox::new();
+        input.insert_char('h');
+        assert_eq!(input.content, "h");
+        assert_eq!(input.cursor_pos, 1);
     }
 
     #[test]
     fn insert_multiple_chars() {
-        let input = InputBox::new()
-            .insert_char('h')
-            .insert_char('i');
+        let mut input = InputBox::new();
+        input.insert_char('h');
+        input.insert_char('i');
         assert_eq!(input.content, "hi");
         assert_eq!(input.cursor_pos, 2);
     }
 
     #[test]
     fn delete_char_removes_last() {
-        let input = InputBox::new()
-            .insert_char('a')
-            .insert_char('b')
-            .delete_char();
+        let mut input = InputBox::new();
+        input.insert_char('a');
+        input.insert_char('b');
+        input.delete_char();
         assert_eq!(input.content, "a");
         assert_eq!(input.cursor_pos, 1);
     }
 
     #[test]
     fn delete_char_at_start_does_nothing() {
-        let input = InputBox::new().delete_char();
+        let mut input = InputBox::new();
+        input.delete_char();
         assert!(input.content.is_empty());
         assert_eq!(input.cursor_pos, 0);
     }
 
     #[test]
     fn take_content_clears_and_returns() {
-        let input = InputBox::new()
-            .insert_char('h')
-            .insert_char('i');
-        let (cleared, content) = input.take_content();
+        let mut input = InputBox::new();
+        input.insert_char('h');
+        input.insert_char('i');
+        let content = input.take_content();
         assert_eq!(content, "hi");
-        assert!(cleared.content.is_empty());
-        assert_eq!(cleared.cursor_pos, 0);
+        assert!(input.content.is_empty());
+        assert_eq!(input.cursor_pos, 0);
     }
 
     #[test]
-    fn set_mode_returns_new_state() {
-        let input = InputBox::new();
-        let insert = input.set_mode(Mode::Insert);
-        assert_eq!(insert.mode, Mode::Insert);
-        assert_eq!(input.mode, Mode::Normal); // original unchanged
+    fn set_mode_mutates_in_place() {
+        let mut input = InputBox::new();
+        input.set_mode(Mode::Insert);
+        assert_eq!(input.mode, Mode::Insert);
     }
 
     #[test]
     fn handles_unicode_correctly() {
-        let input = InputBox::new()
-            .insert_char('🦀')
-            .insert_char('!')
-            .delete_char();
-        assert_eq!(input.content, "🦀");
+        let mut input = InputBox::new();
+        input.insert_char('\u{1f980}');
+        input.insert_char('!');
+        input.delete_char();
+        assert_eq!(input.content, "\u{1f980}");
         assert_eq!(input.cursor_pos, 1);
     }
 

@@ -2,6 +2,7 @@ pub mod anthropic;
 pub mod google;
 pub mod ollama;
 pub mod openai;
+pub mod streaming;
 pub mod types;
 
 use std::collections::HashMap;
@@ -9,6 +10,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
+use crate::config::types::AppConfig;
 use types::{ChatRequest, LlmError, ModelInfo, StreamChunk};
 
 /// Trait for LLM provider implementations.
@@ -35,6 +37,12 @@ pub struct ProviderRegistry {
     providers: HashMap<String, Box<dyn LlmProvider>>,
 }
 
+impl Default for ProviderRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProviderRegistry {
     pub fn new() -> Self {
         Self {
@@ -58,6 +66,76 @@ impl ProviderRegistry {
     pub fn is_empty(&self) -> bool {
         self.providers.is_empty()
     }
+}
+
+/// Build a provider registry from the application config.
+pub fn build_registry(config: &AppConfig) -> ProviderRegistry {
+    let mut registry = ProviderRegistry::new();
+
+    for (name, provider_config) in &config.providers {
+        let models: Vec<ModelInfo> = provider_config
+            .models
+            .iter()
+            .map(ModelInfo::new)
+            .collect();
+
+        match provider_config.provider_type.as_str() {
+            "ollama" => {
+                let base_url = provider_config
+                    .base_url
+                    .as_deref()
+                    .unwrap_or("http://localhost:11434");
+                let provider = ollama::OllamaProvider::new(name, base_url, models);
+                registry.register(Box::new(provider));
+                tracing::info!("Registered Ollama provider: {name}");
+            }
+            "anthropic" => {
+                let api_key_env = provider_config.api_key_env.as_deref().unwrap_or("");
+                let base_url = provider_config
+                    .base_url
+                    .as_deref()
+                    .unwrap_or("https://api.anthropic.com/v1/messages");
+                if let Ok(api_key) = std::env::var(api_key_env) {
+                    let provider = anthropic::AnthropicProvider::new(name, api_key, base_url, models);
+                    registry.register(Box::new(provider));
+                    tracing::info!("Registered Anthropic provider: {name}");
+                } else {
+                    tracing::warn!("Skipping provider {name}: {api_key_env} not set");
+                }
+            }
+            "google" => {
+                let api_key_env = provider_config.api_key_env.as_deref().unwrap_or("");
+                let base_url = provider_config
+                    .base_url
+                    .as_deref()
+                    .unwrap_or("https://generativelanguage.googleapis.com/v1beta");
+                if let Ok(api_key) = std::env::var(api_key_env) {
+                    let provider = google::GoogleProvider::new(name, api_key, base_url, models);
+                    registry.register(Box::new(provider));
+                    tracing::info!("Registered Google provider: {name}");
+                } else {
+                    tracing::warn!("Skipping provider {name}: {api_key_env} not set");
+                }
+            }
+            _ => {
+                // Default: OpenAI-compatible
+                let api_key_env = provider_config.api_key_env.as_deref().unwrap_or("");
+                let base_url = provider_config
+                    .base_url
+                    .as_deref()
+                    .unwrap_or("https://api.openai.com/v1");
+                if let Ok(api_key) = std::env::var(api_key_env) {
+                    let provider = openai::OpenAiProvider::new(name, api_key, base_url, models);
+                    registry.register(Box::new(provider));
+                    tracing::info!("Registered OpenAI provider: {name}");
+                } else {
+                    tracing::warn!("Skipping provider {name}: {api_key_env} not set");
+                }
+            }
+        }
+    }
+
+    registry
 }
 
 #[cfg(test)]

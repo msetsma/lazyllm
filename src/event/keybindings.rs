@@ -43,6 +43,7 @@ fn resolve_normal_mode(key: KeyEvent, _focus: FocusTarget) -> Action {
         KeyCode::Enter => Action::SelectItem,
         KeyCode::Char('n') => Action::NewChat,
         KeyCode::Char('d') => Action::DeleteChat,
+        KeyCode::Char('m') => Action::ToggleModelSelector,
         KeyCode::Char('?') => Action::ToggleHelp,
         KeyCode::Char('l') | KeyCode::Right => Action::FocusNext,
         KeyCode::Char('h') | KeyCode::Left => Action::FocusPrev,
@@ -55,6 +56,7 @@ fn resolve_visual_mode(key: KeyEvent) -> Action {
         KeyCode::Esc => Action::SwitchMode(Mode::Normal),
         KeyCode::Char('j') | KeyCode::Down => Action::ScrollDown,
         KeyCode::Char('k') | KeyCode::Up => Action::ScrollUp,
+        KeyCode::Char('y') => Action::CopySelection,
         _ => Action::None,
     }
 }

@@ -1,5 +1,7 @@
 pub mod app;
+pub mod command;
 pub mod config;
+pub mod conversation;
 pub mod event;
 pub mod llm;
 pub mod markdown;

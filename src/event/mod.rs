@@ -36,10 +36,10 @@ pub fn spawn_event_loop(
                         _ => None,
                     };
 
-                    if let Some(app_event) = app_event {
-                        if tx.send(app_event).is_err() {
-                            break;
-                        }
+                    if let Some(app_event) = app_event
+                        && tx.send(app_event).is_err()
+                    {
+                        break;
                     }
                 }
             } else {

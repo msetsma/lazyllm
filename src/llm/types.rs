@@ -10,6 +10,17 @@ pub enum Role {
     Tool,
 }
 
+impl Role {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::System => "system",
+            Role::Tool => "tool",
+        }
+    }
+}
+
 /// A single message in a conversation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
@@ -75,11 +86,48 @@ impl ChatRequest {
     }
 }
 
+/// Token usage statistics returned by providers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TokenUsage {
+    /// Tokens consumed by the prompt/input.
+    pub input_tokens: u32,
+    /// Tokens generated in the response/output.
+    pub output_tokens: u32,
+}
+
+impl TokenUsage {
+    pub fn new(input_tokens: u32, output_tokens: u32) -> Self {
+        Self {
+            input_tokens,
+            output_tokens,
+        }
+    }
+
+    /// Total tokens (input + output).
+    pub fn total(&self) -> u32 {
+        self.input_tokens + self.output_tokens
+    }
+}
+
+impl std::fmt::Display for TokenUsage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}in + {}out = {} tokens",
+            self.input_tokens,
+            self.output_tokens,
+            self.total()
+        )
+    }
+}
+
 /// Incremental chunks received during streaming.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamChunk {
     /// A text delta to append to the current response.
     Delta(String),
+    /// Token usage statistics for this response.
+    Usage(TokenUsage),
     /// The stream has completed successfully.
     Done,
     /// An error occurred during streaming.
@@ -206,6 +254,34 @@ mod tests {
 
         let err = StreamChunk::Error("oops".to_string());
         assert_eq!(err, StreamChunk::Error("oops".to_string()));
+
+        let usage = StreamChunk::Usage(TokenUsage::new(10, 20));
+        assert_eq!(usage, StreamChunk::Usage(TokenUsage::new(10, 20)));
+    }
+
+    #[test]
+    fn token_usage_new_and_total() {
+        let usage = TokenUsage::new(100, 200);
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 200);
+        assert_eq!(usage.total(), 300);
+    }
+
+    #[test]
+    fn token_usage_default() {
+        let usage = TokenUsage::default();
+        assert_eq!(usage.input_tokens, 0);
+        assert_eq!(usage.output_tokens, 0);
+        assert_eq!(usage.total(), 0);
+    }
+
+    #[test]
+    fn token_usage_display() {
+        let usage = TokenUsage::new(150, 423);
+        let display = format!("{usage}");
+        assert!(display.contains("150in"));
+        assert!(display.contains("423out"));
+        assert!(display.contains("573 tokens"));
     }
 
     #[test]

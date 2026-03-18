@@ -1,58 +1,74 @@
+use std::io::Write;
 use std::sync::Arc;
 
+use base64::Engine;
 use tokio::sync::mpsc;
-use uuid::Uuid;
 
 use crate::config::types::AppConfig;
+use crate::conversation::ConversationManager;
 use crate::event::types::{Action, FocusTarget, Mode};
 use crate::llm::ProviderRegistry;
-use crate::llm::types::{ChatRequest, Message, StreamChunk};
+use crate::llm::types::{ChatRequest, Message, StreamChunk, TokenUsage};
 use crate::store::json_store::JsonStore;
-use crate::store::types::Conversation;
 use crate::ui::components::chat_list::ChatList;
 use crate::ui::components::chat_view::{ChatMessage, ChatView, MessageRole};
+use crate::command::{self, Command};
 use crate::ui::components::help_overlay::HelpOverlay;
 use crate::ui::components::input_box::InputBox;
+use crate::ui::components::model_popup::ModelPopup;
 use crate::ui::components::model_selector::ModelSelector;
 use crate::ui::components::status_bar::StatusBar;
 use crate::ui::components::tool_panel::ToolPanel;
 use crate::ui::components::Component;
+use crate::ui::theme::{Theme, load_theme};
 
 /// Central application state.
 pub struct App {
-    pub mode: Mode,
-    pub focus: FocusTarget,
-    pub running: bool,
-    pub streaming: bool,
-    pub config: AppConfig,
+    pub(crate) mode: Mode,
+    pub(crate) focus: FocusTarget,
+    pub(crate) running: bool,
+    pub(crate) streaming: bool,
+    pub(crate) config: AppConfig,
+    pub(crate) theme: Theme,
 
     // LLM
-    pub registry: Arc<ProviderRegistry>,
-    pub stream_rx: Option<mpsc::UnboundedReceiver<StreamChunk>>,
+    pub(crate) registry: Arc<ProviderRegistry>,
+    pub(crate) stream_rx: Option<mpsc::UnboundedReceiver<StreamChunk>>,
+
+    // Token usage
+    pub(crate) last_usage: Option<TokenUsage>,
+    pub(crate) session_usage: TokenUsage,
 
     // Persistence
-    pub store: Option<JsonStore>,
-    pub active_conversation: Option<Conversation>,
-    /// IDs parallel to chat_list.items for mapping selection -> conversation
-    pub conversation_ids: Vec<Uuid>,
+    pub(crate) conversations: ConversationManager,
 
     // Components
-    pub chat_list: ChatList,
-    pub chat_view: ChatView,
-    pub input_box: InputBox,
-    pub model_selector: ModelSelector,
-    pub status_bar: StatusBar,
-    pub tool_panel: ToolPanel,
-    pub help_overlay: HelpOverlay,
+    pub(crate) chat_list: ChatList,
+    pub(crate) chat_view: ChatView,
+    pub(crate) input_box: InputBox,
+    pub(crate) model_selector: ModelSelector,
+    pub(crate) status_bar: StatusBar,
+    pub(crate) tool_panel: ToolPanel,
+    pub(crate) help_overlay: HelpOverlay,
+    pub(crate) model_popup: ModelPopup,
 }
 
-/// Read-only access to the message history for the active conversation.
 impl App {
+    /// Read-only access to the message history for the active conversation.
     pub fn messages(&self) -> &[Message] {
-        self.active_conversation
-            .as_ref()
-            .map(|c| c.messages.as_slice())
-            .unwrap_or(&[])
+        self.conversations.messages()
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    pub fn focus(&self) -> FocusTarget {
+        self.focus
     }
 }
 
@@ -63,122 +79,75 @@ impl App {
             config.general.default_model.clone(),
         );
 
+        let theme = load_theme(&config.ui.theme);
+
+        let mut chat_view = ChatView::new();
+        chat_view.set_show_timestamps(config.ui.show_timestamps);
+
         Self {
             mode: Mode::Normal,
             focus: FocusTarget::default(),
             running: true,
             streaming: false,
+            theme,
             config,
             registry: Arc::new(registry),
             stream_rx: None,
-            store: None,
-            active_conversation: None,
-            conversation_ids: Vec::new(),
+            last_usage: None,
+            session_usage: TokenUsage::default(),
+            conversations: ConversationManager::new(),
             chat_list: ChatList::new(),
-            chat_view: ChatView::new(),
+            chat_view,
             input_box: InputBox::new(),
             model_selector,
             status_bar: StatusBar::new(),
             tool_panel: ToolPanel::new(),
             help_overlay: HelpOverlay::new(),
+            model_popup: ModelPopup::new(),
         }
     }
 
     /// Initialize with a store, loading existing conversations.
     pub fn with_store(mut self, store: JsonStore) -> Self {
-        self.store = Some(store);
-        self.load_conversation_list();
-        self
-    }
-
-    /// Load conversation summaries from the store into the chat list.
-    fn load_conversation_list(&mut self) {
-        let store = match &self.store {
-            Some(s) => s,
-            None => return,
-        };
-
-        match store.list() {
-            Ok(summaries) => {
-                let titles: Vec<String> = summaries.iter().map(|s| s.title.clone()).collect();
-                let ids: Vec<Uuid> = summaries.iter().map(|s| s.id).collect();
-                self.chat_list = ChatList::from_items(titles);
-                self.conversation_ids = ids;
-            }
-            Err(e) => {
-                tracing::warn!("Failed to load conversations: {e}");
-            }
+        self.conversations = ConversationManager::new().with_store(store);
+        if let Some(list) = self.conversations.load_conversation_list() {
+            self.chat_list = ChatList::from_items(list.titles);
         }
+        self
     }
 
     /// Switch to a conversation by index in the chat list.
     fn switch_to_conversation(&mut self, index: usize) {
-        // Save current conversation first
-        self.save_active_conversation();
+        match self.conversations.switch_to_conversation(index) {
+            Ok(conv) => {
+                // Restore the model/provider from the conversation
+                self.config.general.default_provider = conv.provider.clone();
+                self.config.general.default_model = conv.model.clone();
+                self.model_selector =
+                    ModelSelector::new(conv.provider.clone(), conv.model.clone());
 
-        if let Some(&id) = self.conversation_ids.get(index) {
-            if let Some(store) = &self.store {
-                match store.load(id) {
-                    Ok(conv) => {
-                        self.load_conversation_into_view(&conv);
-                        self.active_conversation = Some(conv);
-                    }
-                    Err(e) => {
-                        self.status_bar = self
-                            .status_bar
-                            .with_status(format!("Failed to load: {e}"));
-                    }
-                }
+                let mut view = ChatView::from_messages(&conv.messages);
+                view.set_show_timestamps(self.config.ui.show_timestamps);
+                self.chat_view = view;
+            }
+            Err(msg) => {
+                self.status_bar.set_status(msg);
             }
         }
-    }
-
-    /// Load a conversation's messages into the chat view.
-    fn load_conversation_into_view(&mut self, conv: &Conversation) {
-        let mut chat_view = ChatView::new();
-        for msg in &conv.messages {
-            let role = match msg.role {
-                crate::llm::types::Role::User => MessageRole::User,
-                crate::llm::types::Role::Assistant => MessageRole::Assistant,
-                crate::llm::types::Role::System => MessageRole::System,
-                crate::llm::types::Role::Tool => MessageRole::System,
-            };
-            chat_view = chat_view.add_message(ChatMessage {
-                role,
-                content: msg.content.clone(),
-            });
-        }
-        self.chat_view = chat_view;
     }
 
     /// Create a new conversation and switch to it.
     fn create_new_conversation(&mut self) {
-        self.save_active_conversation();
-
-        let conv = Conversation::new(
-            self.config.general.default_provider.clone(),
-            self.config.general.default_model.clone(),
-        );
-
-        // Save to store
-        if let Some(store) = &self.store {
-            if let Err(e) = store.save(&conv) {
-                tracing::warn!("Failed to save new conversation: {e}");
-            }
-        }
-
-        let id = conv.id;
-        let title = conv.title.clone();
-        self.active_conversation = Some(conv);
-        self.chat_view = ChatView::new();
+        let provider = self.config.general.default_provider.clone();
+        let model = self.config.general.default_model.clone();
+        let (_id, title) = self.conversations.create_new_conversation(provider, model);
+        let mut view = ChatView::new();
+        view.set_show_timestamps(self.config.ui.show_timestamps);
+        self.chat_view = view;
 
         // Add to list and select it
-        self.conversation_ids.insert(0, id);
-        self.chat_list = ChatList::from_items(
-            std::iter::once(title)
-                .chain(self.chat_list.items.iter().cloned())
-                .collect(),
-        );
+        self.chat_list.items.insert(0, title);
+        self.chat_list.state.select(Some(0));
     }
 
     /// Delete the currently selected conversation.
@@ -188,77 +157,40 @@ impl App {
             None => return,
         };
 
-        if selected >= self.conversation_ids.len() {
-            return;
-        }
+        if let Some((_id, was_active)) = self.conversations.delete_conversation(selected) {
+            self.chat_list.remove_selected();
 
-        let id = self.conversation_ids[selected];
+            if was_active {
+                let mut view = ChatView::new();
+                view.set_show_timestamps(self.config.ui.show_timestamps);
+                self.chat_view = view;
 
-        // Delete from store
-        if let Some(store) = &self.store {
-            if let Err(e) = store.delete(id) {
-                tracing::warn!("Failed to delete conversation: {e}");
-            }
-        }
-
-        // Remove from lists
-        self.conversation_ids.remove(selected);
-        self.chat_list = self.chat_list.remove_selected();
-
-        // If we deleted the active conversation, clear or switch
-        if self
-            .active_conversation
-            .as_ref()
-            .is_some_and(|c| c.id == id)
-        {
-            self.active_conversation = None;
-            self.chat_view = ChatView::new();
-
-            // Switch to another conversation if available
-            if let Some(idx) = self.chat_list.selected_index() {
-                self.switch_to_conversation(idx);
+                // Switch to another conversation if available
+                if let Some(idx) = self.chat_list.selected_index() {
+                    self.switch_to_conversation(idx);
+                }
             }
         }
     }
 
     /// Save the active conversation to the store.
-    fn save_active_conversation(&mut self) {
-        let conv = match &self.active_conversation {
-            Some(c) => c,
-            None => return,
-        };
-
-        if let Some(store) = &self.store {
-            if let Err(e) = store.save(conv) {
-                tracing::warn!("Failed to save conversation: {e}");
-            }
-        }
+    fn save_active_conversation(&self) {
+        self.conversations.save_active_conversation();
     }
 
     /// Update the active conversation's title based on content.
     fn update_conversation_title(&mut self) {
-        let conv = match &mut self.active_conversation {
-            Some(c) => c,
-            None => return,
-        };
-
-        if conv.title == "New Chat" && !conv.messages.is_empty() {
-            let new_title = conv.auto_title();
-            conv.title = new_title.clone();
-
-            // Update the chat list display
-            if let Some(idx) = self
-                .conversation_ids
-                .iter()
-                .position(|&id| id == conv.id)
-            {
-                self.chat_list = self.chat_list.update_item(idx, new_title);
-            }
+        if let Some((idx, new_title)) = self.conversations.update_conversation_title() {
+            self.chat_list.update_item(idx, new_title);
         }
     }
 
     /// Process an action. Returns quickly; LLM streaming happens in background.
     pub async fn update(&mut self, action: Action) {
+        if self.model_popup.visible && self.handle_popup_action(&action) {
+            return;
+        }
+
         match action {
             Action::Quit => {
                 self.save_active_conversation();
@@ -268,7 +200,7 @@ impl App {
                 self.mode = mode;
                 self.input_box.handle_action(&Action::SwitchMode(mode));
                 self.status_bar.handle_action(&Action::SwitchMode(mode));
-                if mode == Mode::Insert {
+                if mode == Mode::Insert || mode == Mode::Command {
                     self.focus = FocusTarget::Input;
                 }
             }
@@ -279,27 +211,24 @@ impl App {
                 self.focus = self.focus.prev();
             }
             Action::SendMessage => {
-                let (cleared, content) = self.input_box.take_content();
-                self.input_box = cleared;
+                let content = self.input_box.take_content();
                 if !content.trim().is_empty() {
                     let trimmed = content.trim().to_string();
 
                     // Create a conversation if none active
-                    if self.active_conversation.is_none() {
+                    if self.conversations.active_conversation.is_none() {
                         self.create_new_conversation();
                     }
 
                     // Add user message to chat view
-                    self.chat_view = self.chat_view.add_message(ChatMessage {
+                    self.chat_view.add_message(ChatMessage {
                         role: MessageRole::User,
                         content: trimmed.clone(),
+                        timestamp: Some(chrono::Local::now()),
                     });
 
                     // Add to conversation
-                    if let Some(conv) = &self.active_conversation {
-                        self.active_conversation =
-                            Some(conv.add_message(Message::user(&trimmed)));
-                    }
+                    self.conversations.add_message(Message::user(&trimmed));
 
                     // Auto-title after first message
                     self.update_conversation_title();
@@ -309,6 +238,16 @@ impl App {
                     self.start_streaming();
                 }
             }
+            Action::InputSubmit => {
+                if self.mode == Mode::Command {
+                    let content = self.input_box.take_content();
+                    self.execute_command(&content);
+                    self.mode = Mode::Normal;
+                    self.input_box.handle_action(&Action::SwitchMode(Mode::Normal));
+                    self.status_bar
+                        .handle_action(&Action::SwitchMode(Mode::Normal));
+                }
+            }
             Action::InsertChar(_) | Action::DeleteChar => {
                 self.input_box.handle_action(&action);
             }
@@ -316,37 +255,194 @@ impl App {
                 self.dispatch_to_focused(&action);
             }
             Action::NewChat => {
-                if self.store.is_some() {
+                if self.conversations.store.is_some() {
                     self.create_new_conversation();
                 } else {
                     self.chat_list.handle_action(&action);
                 }
             }
             Action::DeleteChat => {
-                if self.store.is_some() {
+                if self.conversations.store.is_some() {
                     self.delete_selected_conversation();
                 } else {
                     self.chat_list.handle_action(&action);
                 }
             }
             Action::SelectItem => {
-                if let Some(idx) = self.chat_list.selected_index() {
-                    if self.store.is_some() {
-                        self.switch_to_conversation(idx);
-                    }
+                if let Some(idx) = self.chat_list.selected_index()
+                    && self.conversations.store.is_some()
+                {
+                    self.switch_to_conversation(idx);
                 }
             }
             Action::ToggleHelp => {
                 self.help_overlay.handle_action(&action);
             }
+            Action::ToggleModelSelector => {
+                if self.model_popup.visible {
+                    self.model_popup.close();
+                } else {
+                    self.model_popup.open(
+                        &self.registry,
+                        &self.config.general.default_provider,
+                        &self.config.general.default_model,
+                    );
+                }
+            }
+            Action::SelectModel => {
+                // Handled via popup routing guard above
+            }
+            Action::CopySelection => {
+                self.copy_last_response();
+            }
             Action::Tick => {
                 self.drain_stream_chunks();
             }
-            Action::ToggleModelSelector | Action::SelectModel => {
-                // TODO Phase 5: model selector popup
-            }
-            Action::Resize(_, _) | Action::None | Action::InputSubmit => {}
+            Action::Resize(_, _) | Action::None => {}
         }
+    }
+
+    /// Copy the last assistant response content to the system clipboard.
+    fn copy_last_response(&mut self) {
+        let content = match self
+            .chat_view
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MessageRole::Assistant)
+        {
+            Some(msg) if !msg.content.is_empty() => msg.content.clone(),
+            Some(_) => {
+                self.status_bar
+                    .set_status("Nothing to copy".to_string());
+                return;
+            }
+            None => {
+                self.status_bar
+                    .set_status("No assistant message to copy".to_string());
+                return;
+            }
+        };
+
+        match copy_to_clipboard(&content) {
+            Ok(()) => {
+                let preview = if content.len() > 60 {
+                    format!("{}...", &content[..60])
+                } else {
+                    content
+                };
+                self.status_bar
+                    .set_status(format!("Copied: {preview}"));
+            }
+            Err(e) => {
+                self.status_bar
+                    .set_status(format!("Copy failed: {e}"));
+            }
+        }
+    }
+
+    /// Execute a parsed command from command mode.
+    fn execute_command(&mut self, input: &str) {
+        match command::parse_command(input) {
+            Command::Quit => {
+                self.save_active_conversation();
+                self.running = false;
+            }
+            Command::Model(name) => {
+                if let Some(provider_name) = self.find_model(&name) {
+                    self.set_active_model(provider_name, name);
+                } else {
+                    self.status_bar
+                        .set_status(format!("Unknown model: {name}"));
+                }
+            }
+            Command::Provider(name) => {
+                if self.registry.get(&name).is_some() {
+                    let model = self.config.general.default_model.clone();
+                    self.set_active_model(name, model);
+                } else {
+                    self.status_bar
+                        .set_status(format!("Unknown provider: {name}"));
+                }
+            }
+            Command::NewChat => {
+                self.create_new_conversation();
+            }
+            Command::DeleteChat => {
+                self.delete_selected_conversation();
+            }
+            Command::Help => {
+                self.help_overlay.handle_action(&Action::ToggleHelp);
+            }
+            Command::Clear => {
+                self.chat_view.clear();
+                if let Some(conv) = &mut self.conversations.active_conversation {
+                    conv.messages.clear();
+                }
+                self.save_active_conversation();
+            }
+            Command::Unknown(cmd) => {
+                self.status_bar
+                    .set_status(format!("Unknown command: {cmd}"));
+            }
+        }
+    }
+
+    /// Handle actions when the model popup is visible. Returns true if consumed.
+    fn handle_popup_action(&mut self, action: &Action) -> bool {
+        match action {
+            Action::ScrollUp
+            | Action::ScrollDown
+            | Action::SelectItem
+            | Action::ToggleModelSelector => {
+                let follow_up = self.model_popup.handle_action(action);
+                if let Some(Action::SelectModel) = follow_up {
+                    if let Some((provider, model)) = self.model_popup.selected_entry() {
+                        self.set_active_model(provider, model);
+                    }
+                    self.model_popup.close();
+                }
+                true
+            }
+            Action::SwitchMode(Mode::Normal) => {
+                self.model_popup.close();
+                true
+            }
+            Action::Quit | Action::Tick => false, // pass through
+            _ => true,                            // consume other actions
+        }
+    }
+
+    /// Update the active model and provider across config, selector, conversation, and status bar.
+    fn set_active_model(&mut self, provider: String, model: String) {
+        self.config.general.default_provider = provider.clone();
+        self.config.general.default_model = model.clone();
+        self.model_selector = ModelSelector::new(provider.clone(), model.clone());
+
+        // Update the active conversation's model/provider
+        if let Some(conv) = &mut self.conversations.active_conversation {
+            conv.provider = provider.clone();
+            conv.model = model.clone();
+            self.save_active_conversation();
+        }
+
+        self.status_bar
+            .set_status(format!("Model: {provider}/{model}"));
+    }
+
+    /// Find which provider has a model with the given ID.
+    fn find_model(&self, model_id: &str) -> Option<String> {
+        for provider_name in self.registry.list_providers() {
+            if let Some(provider) = self.registry.get(provider_name)
+                && provider
+                    .available_models()
+                    .iter()
+                    .any(|m| m.id == model_id)
+            {
+                return Some(provider_name.to_string());
+            }
+        }
+        None
     }
 
     /// Spawn a background task to stream LLM response.
@@ -355,9 +451,8 @@ impl App {
         let _provider = match self.registry.get(provider_name) {
             Some(p) => p,
             None => {
-                self.status_bar = self
-                    .status_bar
-                    .with_status(format!("No provider: {provider_name}"));
+                self.status_bar
+                    .set_status(format!("No provider: {provider_name}"));
                 return;
             }
         };
@@ -369,23 +464,25 @@ impl App {
         let (tx, rx) = mpsc::unbounded_channel();
         self.stream_rx = Some(rx);
         self.streaming = true;
+        self.last_usage = None;
 
         // Add empty assistant message that we'll append chunks to
-        self.chat_view = self.chat_view.add_message(ChatMessage {
+        self.chat_view.add_message(ChatMessage {
             role: MessageRole::Assistant,
             content: String::new(),
+            timestamp: Some(chrono::Local::now()),
         });
 
-        self.status_bar = self.status_bar.with_status("streaming...".to_string());
+        self.status_bar.set_status("streaming...".to_string());
 
         let registry = Arc::clone(&self.registry);
         let provider_name = provider_name.clone();
 
         tokio::spawn(async move {
-            if let Some(provider) = registry.get(&provider_name) {
-                if let Err(e) = provider.chat(request, tx.clone()).await {
-                    tx.send(StreamChunk::Error(e.to_string())).ok();
-                }
+            if let Some(provider) = registry.get(&provider_name)
+                && let Err(e) = provider.chat(request, tx.clone()).await
+            {
+                tx.send(StreamChunk::Error(e.to_string())).ok();
             }
         });
     }
@@ -400,15 +497,21 @@ impl App {
         loop {
             match rx.try_recv() {
                 Ok(StreamChunk::Delta(text)) => {
-                    self.chat_view = self.chat_view.append_to_last(&text);
+                    self.chat_view.append_to_last(&text);
+                }
+                Ok(StreamChunk::Usage(usage)) => {
+                    // Accumulate partial usage (Anthropic sends input + output separately)
+                    let current = self.last_usage.get_or_insert(TokenUsage::default());
+                    current.input_tokens += usage.input_tokens;
+                    current.output_tokens += usage.output_tokens;
                 }
                 Ok(StreamChunk::Done) => {
                     self.finish_streaming();
                     break;
                 }
                 Ok(StreamChunk::Error(msg)) => {
-                    self.chat_view =
-                        self.chat_view.append_to_last(&format!("\n[Error: {msg}]"));
+                    self.chat_view
+                        .append_to_last(&format!("\n[Error: {msg}]"));
                     self.finish_streaming();
                     break;
                 }
@@ -426,17 +529,27 @@ impl App {
         self.stream_rx = None;
 
         // Save the assistant response to the conversation
-        if let Some(last) = self.chat_view.messages.last() {
-            if last.role == MessageRole::Assistant {
-                if let Some(conv) = &self.active_conversation {
-                    self.active_conversation =
-                        Some(conv.add_message(Message::assistant(&last.content)));
-                }
-            }
+        if let Some(last) = self.chat_view.messages.last()
+            && last.role == MessageRole::Assistant
+        {
+            self.conversations
+                .add_message(Message::assistant(&last.content));
         }
 
         self.save_active_conversation();
-        self.status_bar = self.status_bar.with_status("ready".to_string());
+
+        // Build status with token usage if available
+        let status = if let Some(usage) = self.last_usage.take() {
+            self.session_usage.input_tokens += usage.input_tokens;
+            self.session_usage.output_tokens += usage.output_tokens;
+            format!(
+                "ready | {} (session: {})",
+                usage, self.session_usage
+            )
+        } else {
+            "ready".to_string()
+        };
+        self.status_bar.set_status(status);
     }
 
     fn dispatch_to_focused(&mut self, action: &Action) {
@@ -455,9 +568,41 @@ impl App {
     }
 }
 
+/// Copy text to the system clipboard.
+///
+/// Tries arboard (native OS clipboard) first, then falls back to the OSC 52
+/// escape sequence which works in terminals that support it (including over SSH).
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    // Try native clipboard via arboard
+    match arboard::Clipboard::new() {
+        Ok(mut clipboard) => match clipboard.set_text(text) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                tracing::debug!("arboard set_text failed: {e}, trying OSC 52");
+            }
+        },
+        Err(e) => {
+            tracing::debug!("arboard init failed: {e}, trying OSC 52");
+        }
+    }
+
+    // Fallback: OSC 52 escape sequence
+    // Works in xterm, kitty, alacritty, iTerm2, Windows Terminal, tmux, etc.
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+    let osc = format!("\x1b]52;c;{encoded}\x07");
+    std::io::stdout()
+        .write_all(osc.as_bytes())
+        .map_err(|e| format!("clipboard unavailable: {e}"))?;
+    std::io::stdout()
+        .flush()
+        .map_err(|e| format!("clipboard unavailable: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::types::Conversation;
     use tempfile::TempDir;
 
     fn test_app() -> App {
@@ -479,7 +624,7 @@ mod tests {
         assert_eq!(app.focus, FocusTarget::ChatView);
         assert!(!app.streaming);
         assert!(app.messages().is_empty());
-        assert!(app.active_conversation.is_none());
+        assert!(app.conversations.active_conversation.is_none());
     }
 
     #[tokio::test]
@@ -521,6 +666,7 @@ mod tests {
         assert_eq!(app.chat_view.messages.len(), 1);
         assert_eq!(app.chat_view.messages[0].content, "hi");
         assert_eq!(app.chat_view.messages[0].role, MessageRole::User);
+        assert!(app.chat_view.messages[0].timestamp.is_some());
         assert!(app.input_box.content.is_empty());
     }
 
@@ -584,9 +730,10 @@ mod tests {
         tx.send(StreamChunk::Delta(" world".to_string())).unwrap();
         tx.send(StreamChunk::Done).unwrap();
 
-        app.chat_view = app.chat_view.add_message(ChatMessage {
+        app.chat_view.add_message(ChatMessage {
             role: MessageRole::Assistant,
             content: String::new(),
+            timestamp: None,
         });
         app.stream_rx = Some(rx);
         app.streaming = true;
@@ -609,9 +756,10 @@ mod tests {
         tx.send(StreamChunk::Error("rate limited".to_string()))
             .unwrap();
 
-        app.chat_view = app.chat_view.add_message(ChatMessage {
+        app.chat_view.add_message(ChatMessage {
             role: MessageRole::Assistant,
             content: String::new(),
+            timestamp: None,
         });
         app.stream_rx = Some(rx);
         app.streaming = true;
@@ -632,9 +780,10 @@ mod tests {
         tx.send(StreamChunk::Delta("hi".to_string())).unwrap();
         drop(tx);
 
-        app.chat_view = app.chat_view.add_message(ChatMessage {
+        app.chat_view.add_message(ChatMessage {
             role: MessageRole::Assistant,
             content: String::new(),
+            timestamp: None,
         });
         app.stream_rx = Some(rx);
         app.streaming = true;
@@ -664,9 +813,10 @@ mod tests {
             .unwrap();
         tx.send(StreamChunk::Done).unwrap();
 
-        app.chat_view = app.chat_view.add_message(ChatMessage {
+        app.chat_view.add_message(ChatMessage {
             role: MessageRole::Assistant,
             content: String::new(),
+            timestamp: None,
         });
         app.stream_rx = Some(rx);
         app.streaming = true;
@@ -680,13 +830,57 @@ mod tests {
         assert!(!app.streaming);
     }
 
+    #[tokio::test]
+    async fn copy_selection_copies_last_assistant() {
+        let mut app = test_app();
+        app.chat_view.add_message(ChatMessage {
+            role: MessageRole::Assistant,
+            content: "Hello from assistant".to_string(),
+            timestamp: None,
+        });
+        app.update(Action::CopySelection).await;
+        assert!(app
+            .status_bar
+            .status_message
+            .as_ref()
+            .unwrap()
+            .contains("Copied:"));
+    }
+
+    #[tokio::test]
+    async fn copy_selection_no_assistant_shows_error() {
+        let mut app = test_app();
+        app.update(Action::CopySelection).await;
+        assert!(app
+            .status_bar
+            .status_message
+            .as_ref()
+            .unwrap()
+            .contains("No assistant message"));
+    }
+
+    #[tokio::test]
+    async fn theme_is_loaded_from_config() {
+        let app = test_app();
+        // Default theme should have cyan borders
+        assert_eq!(app.theme.border_focused, ratatui::style::Color::Cyan);
+    }
+
+    #[tokio::test]
+    async fn show_timestamps_propagated_to_chat_view() {
+        let mut config = AppConfig::default();
+        config.ui.show_timestamps = true;
+        let app = App::new(config, ProviderRegistry::new());
+        assert!(app.chat_view.show_timestamps);
+    }
+
     // ── Store integration tests ──
 
     #[tokio::test]
     async fn app_with_store_starts_with_empty_list() {
         let (app, _tmp) = test_app_with_store();
-        assert!(app.store.is_some());
-        assert!(app.conversation_ids.is_empty());
+        assert!(app.conversations.store.is_some());
+        assert!(app.conversations.conversation_ids.is_empty());
         assert!(app.chat_list.items.is_empty());
     }
 
@@ -696,9 +890,9 @@ mod tests {
         app.update(Action::NewChat).await;
 
         assert_eq!(app.chat_list.items.len(), 1);
-        assert_eq!(app.conversation_ids.len(), 1);
-        assert!(app.active_conversation.is_some());
-        assert_eq!(app.active_conversation.as_ref().unwrap().title, "New Chat");
+        assert_eq!(app.conversations.conversation_ids.len(), 1);
+        assert!(app.conversations.active_conversation.is_some());
+        assert_eq!(app.conversations.active_conversation.as_ref().unwrap().title, "New Chat");
     }
 
     #[tokio::test]
@@ -706,7 +900,7 @@ mod tests {
         let (mut app, _tmp) = test_app_with_store();
         app.update(Action::NewChat).await;
 
-        let store = app.store.as_ref().unwrap();
+        let store = app.conversations.store.as_ref().unwrap();
         let summaries = store.list().unwrap();
         assert_eq!(summaries.len(), 1);
     }
@@ -718,8 +912,8 @@ mod tests {
         app.update(Action::InsertChar('i')).await;
         app.update(Action::SendMessage).await;
 
-        assert!(app.active_conversation.is_some());
-        let conv = app.active_conversation.as_ref().unwrap();
+        assert!(app.conversations.active_conversation.is_some());
+        let conv = app.conversations.active_conversation.as_ref().unwrap();
         assert_eq!(conv.messages.len(), 1);
         assert_eq!(conv.messages[0].content, "hi");
     }
@@ -733,7 +927,7 @@ mod tests {
         app.update(Action::InsertChar('p')).await;
         app.update(Action::SendMessage).await;
 
-        let conv = app.active_conversation.as_ref().unwrap();
+        let conv = app.conversations.active_conversation.as_ref().unwrap();
         assert_eq!(conv.title, "Help");
         assert_eq!(app.chat_list.items[0], "Help");
     }
@@ -745,8 +939,8 @@ mod tests {
         app.update(Action::InsertChar('i')).await;
         app.update(Action::SendMessage).await;
 
-        let id = app.active_conversation.as_ref().unwrap().id;
-        let store = app.store.as_ref().unwrap();
+        let id = app.conversations.active_conversation.as_ref().unwrap().id;
+        let store = app.conversations.store.as_ref().unwrap();
         let loaded = store.load(id).unwrap();
         assert_eq!(loaded.messages.len(), 1);
     }
@@ -755,14 +949,14 @@ mod tests {
     async fn delete_chat_removes_from_store() {
         let (mut app, _tmp) = test_app_with_store();
         app.update(Action::NewChat).await;
-        let id = app.conversation_ids[0];
+        let id = app.conversations.conversation_ids[0];
 
         app.update(Action::DeleteChat).await;
 
-        assert!(app.conversation_ids.is_empty());
-        assert!(app.active_conversation.is_none());
+        assert!(app.conversations.conversation_ids.is_empty());
+        assert!(app.conversations.active_conversation.is_none());
 
-        let store = app.store.as_ref().unwrap();
+        let store = app.conversations.store.as_ref().unwrap();
         assert!(store.load(id).is_err());
     }
 
@@ -792,10 +986,10 @@ mod tests {
         app.update(Action::InsertChar('x')).await;
         app.update(Action::SendMessage).await;
 
-        let id = app.active_conversation.as_ref().unwrap().id;
+        let id = app.conversations.active_conversation.as_ref().unwrap().id;
         app.update(Action::Quit).await;
 
-        let store = app.store.as_ref().unwrap();
+        let store = app.conversations.store.as_ref().unwrap();
         let loaded = store.load(id).unwrap();
         assert_eq!(loaded.messages.len(), 1);
     }
@@ -807,8 +1001,8 @@ mod tests {
         // Create a conversation and simulate streaming
         app.create_new_conversation();
         let user_msg = Message::user("hi");
-        app.active_conversation = Some(
-            app.active_conversation
+        app.conversations.active_conversation = Some(
+            app.conversations.active_conversation
                 .as_ref()
                 .unwrap()
                 .add_message(user_msg),
@@ -818,9 +1012,10 @@ mod tests {
         tx.send(StreamChunk::Delta("Hello!".to_string())).unwrap();
         tx.send(StreamChunk::Done).unwrap();
 
-        app.chat_view = app.chat_view.add_message(ChatMessage {
+        app.chat_view.add_message(ChatMessage {
             role: MessageRole::Assistant,
             content: String::new(),
+            timestamp: None,
         });
         app.stream_rx = Some(rx);
         app.streaming = true;
@@ -828,12 +1023,12 @@ mod tests {
         app.drain_stream_chunks();
 
         // Assistant response should be saved
-        let conv = app.active_conversation.as_ref().unwrap();
+        let conv = app.conversations.active_conversation.as_ref().unwrap();
         assert_eq!(conv.messages.len(), 2); // user + assistant
         assert_eq!(conv.messages[1].content, "Hello!");
 
         // Should be persisted to store
-        let store = app.store.as_ref().unwrap();
+        let store = app.conversations.store.as_ref().unwrap();
         let loaded = store.load(conv.id).unwrap();
         assert_eq!(loaded.messages.len(), 2);
     }
@@ -854,6 +1049,168 @@ mod tests {
 
         assert_eq!(app.chat_list.items.len(), 1);
         assert_eq!(app.chat_list.items[0], "Existing Chat");
-        assert_eq!(app.conversation_ids.len(), 1);
+        assert_eq!(app.conversations.conversation_ids.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn set_active_model_updates_conversation() {
+        let (mut app, _tmp) = test_app_with_store();
+        app.create_new_conversation();
+        assert_eq!(
+            app.conversations.active_conversation.as_ref().unwrap().provider,
+            "openai"
+        );
+
+        app.set_active_model("anthropic".to_string(), "claude".to_string());
+
+        let conv = app.conversations.active_conversation.as_ref().unwrap();
+        assert_eq!(conv.provider, "anthropic");
+        assert_eq!(conv.model, "claude");
+        assert_eq!(app.model_selector.provider, "anthropic");
+        assert_eq!(app.model_selector.model, "claude");
+    }
+
+    #[tokio::test]
+    async fn switch_conversation_restores_model() {
+        let (mut app, _tmp) = test_app_with_store();
+
+        // Create first chat (uses default openai/gpt-4o)
+        app.update(Action::InsertChar('A')).await;
+        app.update(Action::SendMessage).await;
+
+        // Create second chat and switch its model
+        app.update(Action::NewChat).await;
+        app.set_active_model("anthropic".to_string(), "claude".to_string());
+
+        // Switch back to first conversation
+        app.switch_to_conversation(1);
+
+        assert_eq!(app.model_selector.provider, "openai");
+        assert_eq!(app.model_selector.model, "gpt-4o");
+        assert_eq!(app.config.general.default_provider, "openai");
+        assert_eq!(app.config.general.default_model, "gpt-4o");
+    }
+
+    #[tokio::test]
+    async fn set_active_model_status_shows_provider_and_model() {
+        let mut app = test_app();
+        app.set_active_model("ollama".to_string(), "llama3".to_string());
+        assert!(app.status_bar.status_message.as_ref().unwrap().contains("ollama"));
+        assert!(app.status_bar.status_message.as_ref().unwrap().contains("llama3"));
+    }
+
+    // ── Token usage tracking ──
+
+    #[tokio::test]
+    async fn usage_tracked_after_streaming() {
+        let mut app = test_app();
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(StreamChunk::Delta("Hi".to_string())).unwrap();
+        tx.send(StreamChunk::Usage(TokenUsage::new(10, 20))).unwrap();
+        tx.send(StreamChunk::Done).unwrap();
+
+        app.chat_view.add_message(ChatMessage {
+            role: MessageRole::Assistant,
+            content: String::new(),
+            timestamp: None,
+        });
+        app.stream_rx = Some(rx);
+        app.streaming = true;
+
+        app.drain_stream_chunks();
+
+        // last_usage consumed by finish_streaming
+        assert!(app.last_usage.is_none());
+        assert_eq!(app.session_usage.input_tokens, 10);
+        assert_eq!(app.session_usage.output_tokens, 20);
+        let status = app.status_bar.status_message.as_ref().unwrap();
+        assert!(status.contains("10in"));
+        assert!(status.contains("20out"));
+    }
+
+    #[tokio::test]
+    async fn session_usage_accumulates_across_requests() {
+        let mut app = test_app();
+
+        // First request
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(StreamChunk::Usage(TokenUsage::new(10, 20))).unwrap();
+        tx.send(StreamChunk::Done).unwrap();
+        app.chat_view.add_message(ChatMessage {
+            role: MessageRole::Assistant,
+            content: String::new(),
+            timestamp: None,
+        });
+        app.stream_rx = Some(rx);
+        app.streaming = true;
+        app.drain_stream_chunks();
+
+        // Second request
+        let (tx2, rx2) = mpsc::unbounded_channel();
+        tx2.send(StreamChunk::Usage(TokenUsage::new(15, 30))).unwrap();
+        tx2.send(StreamChunk::Done).unwrap();
+        app.chat_view.add_message(ChatMessage {
+            role: MessageRole::Assistant,
+            content: String::new(),
+            timestamp: None,
+        });
+        app.stream_rx = Some(rx2);
+        app.streaming = true;
+        app.drain_stream_chunks();
+
+        assert_eq!(app.session_usage.input_tokens, 25);
+        assert_eq!(app.session_usage.output_tokens, 50);
+        assert_eq!(app.session_usage.total(), 75);
+    }
+
+    #[tokio::test]
+    async fn partial_usage_accumulates_anthropic_style() {
+        let mut app = test_app();
+
+        // Anthropic sends input_tokens in message_start, output_tokens in message_delta
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(StreamChunk::Usage(TokenUsage::new(42, 0))).unwrap();
+        tx.send(StreamChunk::Delta("Hello".to_string())).unwrap();
+        tx.send(StreamChunk::Usage(TokenUsage::new(0, 87))).unwrap();
+        tx.send(StreamChunk::Done).unwrap();
+
+        app.chat_view.add_message(ChatMessage {
+            role: MessageRole::Assistant,
+            content: String::new(),
+            timestamp: None,
+        });
+        app.stream_rx = Some(rx);
+        app.streaming = true;
+
+        app.drain_stream_chunks();
+
+        assert_eq!(app.session_usage.input_tokens, 42);
+        assert_eq!(app.session_usage.output_tokens, 87);
+    }
+
+    #[tokio::test]
+    async fn no_usage_shows_plain_ready() {
+        let mut app = test_app();
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(StreamChunk::Delta("Hello".to_string())).unwrap();
+        tx.send(StreamChunk::Done).unwrap();
+
+        app.chat_view.add_message(ChatMessage {
+            role: MessageRole::Assistant,
+            content: String::new(),
+            timestamp: None,
+        });
+        app.stream_rx = Some(rx);
+        app.streaming = true;
+
+        app.drain_stream_chunks();
+
+        assert_eq!(
+            app.status_bar.status_message.as_deref(),
+            Some("ready")
+        );
+        assert_eq!(app.session_usage.total(), 0);
     }
 }

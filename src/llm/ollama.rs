@@ -1,11 +1,11 @@
 use async_trait::async_trait;
-use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use super::LlmProvider;
-use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk};
+use super::streaming::{check_http_error, stream_sse_response};
+use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk, TokenUsage};
 
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 
@@ -81,6 +81,10 @@ struct OllamaStreamChunk {
     done: bool,
     #[serde(default)]
     error: Option<String>,
+    #[serde(default)]
+    prompt_eval_count: Option<u32>,
+    #[serde(default)]
+    eval_count: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,11 +99,7 @@ impl From<&ChatRequest> for OllamaRequest {
             .messages
             .iter()
             .map(|m| OllamaMessage {
-                role: serde_json::to_value(&m.role)
-                    .unwrap()
-                    .as_str()
-                    .unwrap()
-                    .to_string(),
+                role: m.role.as_str().to_string(),
                 content: m.content.clone(),
             })
             .collect();
@@ -138,13 +138,21 @@ fn parse_ollama_line(line: &str) -> Option<StreamChunk> {
     }
 
     if chunk.done {
+        // Ollama includes usage stats in the final done chunk
+        if chunk.prompt_eval_count.is_some() || chunk.eval_count.is_some() {
+            let input = chunk.prompt_eval_count.unwrap_or(0);
+            let output = chunk.eval_count.unwrap_or(0);
+            // We can't return two chunks from one parse call, so we embed usage
+            // in Done by sending Usage first — the caller will get Done on the next line.
+            return Some(StreamChunk::Usage(TokenUsage::new(input, output)));
+        }
         return Some(StreamChunk::Done);
     }
 
-    if let Some(msg) = chunk.message {
-        if !msg.content.is_empty() {
-            return Some(StreamChunk::Delta(msg.content));
-        }
+    if let Some(msg) = chunk.message
+        && !msg.content.is_empty()
+    {
+        return Some(StreamChunk::Delta(msg.content));
     }
 
     None
@@ -179,49 +187,10 @@ impl LlmProvider for OllamaProvider {
             .await
             .map_err(|e| LlmError::NetworkError(e.to_string()))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let body_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(LlmError::ApiError {
-                status: status.as_u16(),
-                message: body_text,
-            });
-        }
+        let response = check_http_error(response, |body| Some(body.to_string())).await?;
 
         // Ollama streams NDJSON (one JSON object per line)
-        let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
-
-        while let Some(chunk_result) = stream.next().await {
-            let bytes = chunk_result.map_err(|e| LlmError::NetworkError(e.to_string()))?;
-            let text = String::from_utf8_lossy(&bytes);
-            buffer.push_str(&text);
-
-            while let Some(newline_pos) = buffer.find('\n') {
-                let line = buffer[..newline_pos].trim().to_string();
-                buffer = buffer[newline_pos + 1..].to_string();
-
-                if line.is_empty() {
-                    continue;
-                }
-
-                if let Some(chunk) = parse_ollama_line(&line) {
-                    let is_done = chunk == StreamChunk::Done;
-                    if tx.send(chunk).is_err() {
-                        return Ok(());
-                    }
-                    if is_done {
-                        return Ok(());
-                    }
-                }
-            }
-        }
-
-        tx.send(StreamChunk::Done).ok();
-        Ok(())
+        stream_sse_response(response, &tx, parse_ollama_line, |_| false).await
     }
 }
 
@@ -343,5 +312,15 @@ mod tests {
             StreamChunk::Error(msg) => assert!(msg.contains("Failed to parse")),
             other => panic!("Expected Error, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_ollama_done_with_usage() {
+        let line = r#"{"model":"llama3.2","created_at":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":28,"eval_count":150,"total_duration":1234}"#;
+        let chunk = parse_ollama_line(line).unwrap();
+        assert_eq!(
+            chunk,
+            StreamChunk::Usage(super::super::types::TokenUsage::new(28, 150))
+        );
     }
 }

@@ -1,17 +1,18 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem};
 
 use crate::event::types::Action;
+use crate::ui::theme::Theme;
 
 use super::Component;
 
 /// Right panel showing available MCP tools.
 #[derive(Debug, Clone, Default)]
 pub struct ToolPanel {
-    pub servers: Vec<ServerTools>,
+    pub(crate) servers: Vec<ServerTools>,
 }
 
 #[derive(Debug, Clone)]
@@ -31,15 +32,15 @@ impl Component for ToolPanel {
         None
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
-        let border_color = if focused { Color::Cyan } else { Color::DarkGray };
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
+        let border_style = super::focused_border_style(focused, theme);
 
         let mut items: Vec<ListItem> = Vec::new();
 
         for server in &self.servers {
             items.push(ListItem::new(Line::styled(
                 &server.server_name,
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.server_name),
             )));
             for tool in &server.tools {
                 items.push(ListItem::new(Line::from(format!("  {tool}"))));
@@ -49,7 +50,7 @@ impl Component for ToolPanel {
         if items.is_empty() {
             items.push(ListItem::new(Line::styled(
                 "No MCP servers",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.empty_state),
             )));
         }
 
@@ -57,7 +58,7 @@ impl Component for ToolPanel {
             Block::default()
                 .title(" Tools ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color)),
+                .border_style(border_style),
         );
 
         frame.render_widget(list, area);

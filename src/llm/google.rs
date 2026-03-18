@@ -1,12 +1,13 @@
 use async_trait::async_trait;
-use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use super::LlmProvider;
-use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk};
+use super::streaming::{check_http_error, stream_sse_response};
+use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk, TokenUsage};
 
+#[allow(dead_code)]
 const GOOGLE_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 
 /// Google Gemini API provider with SSE streaming.
@@ -33,19 +34,6 @@ impl GoogleProvider {
             models,
             client: Client::new(),
         }
-    }
-
-    pub fn from_env(
-        name: impl Into<String>,
-        api_key_env: &str,
-        models: Vec<String>,
-    ) -> Result<Self, LlmError> {
-        let api_key = std::env::var(api_key_env).map_err(|_| {
-            LlmError::AuthError(format!("Environment variable {api_key_env} not set"))
-        })?;
-
-        let model_infos = models.into_iter().map(ModelInfo::new).collect();
-        Ok(Self::new(name, api_key, GOOGLE_API_URL, model_infos))
     }
 
     fn stream_url(&self, model: &str) -> String {
@@ -90,11 +78,23 @@ struct GeminiGenerationConfig {
 
 /// Gemini streaming response.
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct GeminiStreamResponse {
     #[serde(default)]
     candidates: Vec<GeminiCandidate>,
     #[serde(default)]
+    usage_metadata: Option<GeminiUsageMetadata>,
+    #[serde(default)]
     error: Option<GeminiError>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiUsageMetadata {
+    #[serde(default)]
+    prompt_token_count: Option<u32>,
+    #[serde(default)]
+    candidates_token_count: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,11 +138,7 @@ impl From<&ChatRequest> for GeminiRequest {
         let mut contents = Vec::new();
 
         for msg in &req.messages {
-            let role = serde_json::to_value(&msg.role)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_string();
+            let role = msg.role.as_str();
 
             if role == "system" {
                 system_instruction = Some(GeminiContent {
@@ -156,7 +152,7 @@ impl From<&ChatRequest> for GeminiRequest {
                 let gemini_role = if role == "assistant" {
                     "model".to_string()
                 } else {
-                    role
+                    role.to_string()
                 };
 
                 contents.push(GeminiContent {
@@ -202,15 +198,21 @@ fn parse_gemini_sse(line: &str) -> Option<StreamChunk> {
     if let Some(candidate) = response.candidates.first() {
         if let Some(content) = &candidate.content {
             for part in &content.parts {
-                if let Some(text) = &part.text {
-                    if !text.is_empty() {
-                        return Some(StreamChunk::Delta(text.clone()));
-                    }
+                if let Some(text) = &part.text
+                    && !text.is_empty()
+                {
+                    return Some(StreamChunk::Delta(text.clone()));
                 }
             }
         }
 
         if candidate.finish_reason.as_deref() == Some("STOP") {
+            // If usage metadata is present, emit it; stream-end will send Done
+            if let Some(usage) = &response.usage_metadata {
+                let input = usage.prompt_token_count.unwrap_or(0);
+                let output = usage.candidates_token_count.unwrap_or(0);
+                return Some(StreamChunk::Usage(TokenUsage::new(input, output)));
+            }
             return Some(StreamChunk::Done);
         }
     }
@@ -247,53 +249,14 @@ impl LlmProvider for GoogleProvider {
             .await
             .map_err(|e| LlmError::NetworkError(e.to_string()))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let body_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-
-            let message = serde_json::from_str::<GeminiErrorResponse>(&body_text)
+        let response = check_http_error(response, |body| {
+            serde_json::from_str::<GeminiErrorResponse>(body)
                 .map(|e| e.error.message)
-                .unwrap_or(body_text);
+                .ok()
+        })
+        .await?;
 
-            return Err(LlmError::ApiError {
-                status: status.as_u16(),
-                message,
-            });
-        }
-
-        let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
-
-        while let Some(chunk_result) = stream.next().await {
-            let bytes = chunk_result.map_err(|e| LlmError::NetworkError(e.to_string()))?;
-            let text = String::from_utf8_lossy(&bytes);
-            buffer.push_str(&text);
-
-            while let Some(newline_pos) = buffer.find('\n') {
-                let line = buffer[..newline_pos].trim().to_string();
-                buffer = buffer[newline_pos + 1..].to_string();
-
-                if line.is_empty() {
-                    continue;
-                }
-
-                if let Some(chunk) = parse_gemini_sse(&line) {
-                    let is_done = chunk == StreamChunk::Done;
-                    if tx.send(chunk).is_err() {
-                        return Ok(());
-                    }
-                    if is_done {
-                        return Ok(());
-                    }
-                }
-            }
-        }
-
-        tx.send(StreamChunk::Done).ok();
-        Ok(())
+        stream_sse_response(response, &tx, parse_gemini_sse, |_| false).await
     }
 }
 
@@ -341,22 +304,6 @@ mod tests {
         assert!(url.contains("models/gemini-2.0-flash:streamGenerateContent"));
         assert!(url.contains("key=my-api-key"));
         assert!(url.contains("alt=sse"));
-    }
-
-    #[test]
-    fn from_env_missing_key_returns_auth_error() {
-        let result = GoogleProvider::from_env(
-            "test",
-            "LAZYLLM_TEST_NONEXISTENT_GOOGLE_KEY",
-            vec![],
-        );
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            LlmError::AuthError(msg) => {
-                assert!(msg.contains("LAZYLLM_TEST_NONEXISTENT_GOOGLE_KEY"));
-            }
-            other => panic!("Expected AuthError, got: {:?}", other),
-        }
     }
 
     #[test]
@@ -465,5 +412,15 @@ mod tests {
             StreamChunk::Error(msg) => assert!(msg.contains("Failed to parse")),
             other => panic!("Expected Error, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_gemini_stop_with_usage_metadata() {
+        let line = r#"data: {"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":200,"totalTokenCount":215}}"#;
+        let chunk = parse_gemini_sse(line).unwrap();
+        assert_eq!(
+            chunk,
+            StreamChunk::Usage(super::super::types::TokenUsage::new(15, 200))
+        );
     }
 }

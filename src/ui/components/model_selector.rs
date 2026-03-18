@@ -1,19 +1,20 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::event::types::Action;
+use crate::ui::theme::Theme;
 
 use super::Component;
 
 /// Top bar showing the current model and provider.
 #[derive(Debug, Clone)]
 pub struct ModelSelector {
-    pub provider: String,
-    pub model: String,
-    pub mcp_server_count: usize,
+    pub(crate) provider: String,
+    pub(crate) model: String,
+    pub(crate) mcp_server_count: usize,
 }
 
 impl ModelSelector {
@@ -39,31 +40,31 @@ impl Component for ModelSelector {
         None
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool) {
+    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool, theme: &Theme) {
         let line = Line::from(vec![
-            Span::styled(" Model: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Model: ", Style::default().fg(theme.label)),
             Span::styled(
                 &self.model,
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.highlight)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  Provider: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Provider: ", Style::default().fg(theme.label)),
             Span::styled(
                 &self.provider,
-                Style::default().fg(Color::Green),
+                Style::default().fg(theme.provider_name),
             ),
-            Span::styled("  MCP: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  MCP: ", Style::default().fg(theme.label)),
             Span::styled(
                 format!("{} servers", self.mcp_server_count),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.mcp_count),
             ),
         ]);
 
         let paragraph = Paragraph::new(line).block(
             Block::default()
                 .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(Style::default().fg(theme.border_unfocused)),
         );
 
         frame.render_widget(paragraph, area);

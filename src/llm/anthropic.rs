@@ -1,12 +1,13 @@
 use async_trait::async_trait;
-use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use super::LlmProvider;
-use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk};
+use super::streaming::{check_http_error, stream_sse_response};
+use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk, TokenUsage};
 
+#[allow(dead_code)]
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 4096;
@@ -35,19 +36,6 @@ impl AnthropicProvider {
             models,
             client: Client::new(),
         }
-    }
-
-    pub fn from_env(
-        name: impl Into<String>,
-        api_key_env: &str,
-        models: Vec<String>,
-    ) -> Result<Self, LlmError> {
-        let api_key = std::env::var(api_key_env).map_err(|_| {
-            LlmError::AuthError(format!("Environment variable {api_key_env} not set"))
-        })?;
-
-        let model_infos = models.into_iter().map(ModelInfo::new).collect();
-        Ok(Self::new(name, api_key, ANTHROPIC_API_URL, model_infos))
     }
 
     fn messages_url(&self) -> String {
@@ -89,7 +77,25 @@ struct AnthropicStreamEvent {
     #[serde(default)]
     delta: Option<AnthropicDelta>,
     #[serde(default)]
+    message: Option<AnthropicStreamMessage>,
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
+    #[serde(default)]
     error: Option<AnthropicErrorDetail>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicStreamMessage {
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicUsage {
+    #[serde(default)]
+    input_tokens: Option<u32>,
+    #[serde(default)]
+    output_tokens: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,17 +129,13 @@ impl From<&ChatRequest> for AnthropicRequest {
         let mut messages = Vec::new();
 
         for msg in &req.messages {
-            let role = serde_json::to_value(&msg.role)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_string();
+            let role = msg.role.as_str();
 
             if role == "system" {
                 system = Some(msg.content.clone());
             } else {
                 messages.push(AnthropicMessage {
-                    role,
+                    role: role.to_string(),
                     content: msg.content.clone(),
                 });
             }
@@ -161,22 +163,35 @@ fn parse_anthropic_sse(line: &str) -> Option<StreamChunk> {
 
     match event.event_type.as_str() {
         "content_block_delta" => {
-            if let Some(delta) = &event.delta {
-                if delta.delta_type.as_deref() == Some("text_delta") {
-                    if let Some(text) = &delta.text {
-                        if !text.is_empty() {
-                            return Some(StreamChunk::Delta(text.clone()));
-                        }
-                    }
-                }
+            if let Some(delta) = &event.delta
+                && delta.delta_type.as_deref() == Some("text_delta")
+                && let Some(text) = &delta.text
+                && !text.is_empty()
+            {
+                return Some(StreamChunk::Delta(text.clone()));
+            }
+            None
+        }
+        "message_start" => {
+            // Extract input_tokens from message_start.message.usage
+            if let Some(msg) = &event.message
+                && let Some(usage) = &msg.usage
+                && let Some(input) = usage.input_tokens
+            {
+                return Some(StreamChunk::Usage(TokenUsage::new(input, 0)));
+            }
+            None
+        }
+        "message_delta" => {
+            // Extract output_tokens from message_delta.usage
+            if let Some(usage) = &event.usage
+                && let Some(output) = usage.output_tokens
+            {
+                return Some(StreamChunk::Usage(TokenUsage::new(0, output)));
             }
             None
         }
         "message_stop" => Some(StreamChunk::Done),
-        "message_delta" => {
-            // message_delta with stop_reason indicates completion
-            None
-        }
         "error" => {
             let msg = event
                 .error
@@ -184,7 +199,7 @@ fn parse_anthropic_sse(line: &str) -> Option<StreamChunk> {
                 .unwrap_or_else(|| "Unknown error".to_string());
             Some(StreamChunk::Error(msg))
         }
-        _ => None, // message_start, content_block_start, content_block_stop, ping
+        _ => None, // content_block_start, content_block_stop, ping
     }
 }
 
@@ -219,53 +234,20 @@ impl LlmProvider for AnthropicProvider {
             .await
             .map_err(|e| LlmError::NetworkError(e.to_string()))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let body_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-
-            let message = serde_json::from_str::<AnthropicErrorResponse>(&body_text)
+        let response = check_http_error(response, |body| {
+            serde_json::from_str::<AnthropicErrorResponse>(body)
                 .map(|e| e.error.message)
-                .unwrap_or(body_text);
+                .ok()
+        })
+        .await?;
 
-            return Err(LlmError::ApiError {
-                status: status.as_u16(),
-                message,
-            });
-        }
-
-        let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
-
-        while let Some(chunk_result) = stream.next().await {
-            let bytes = chunk_result.map_err(|e| LlmError::NetworkError(e.to_string()))?;
-            let text = String::from_utf8_lossy(&bytes);
-            buffer.push_str(&text);
-
-            while let Some(newline_pos) = buffer.find('\n') {
-                let line = buffer[..newline_pos].trim().to_string();
-                buffer = buffer[newline_pos + 1..].to_string();
-
-                if line.is_empty() || line.starts_with("event:") {
-                    continue;
-                }
-
-                if let Some(chunk) = parse_anthropic_sse(&line) {
-                    let is_done = chunk == StreamChunk::Done;
-                    if tx.send(chunk).is_err() {
-                        return Ok(());
-                    }
-                    if is_done {
-                        return Ok(());
-                    }
-                }
-            }
-        }
-
-        tx.send(StreamChunk::Done).ok();
-        Ok(())
+        stream_sse_response(
+            response,
+            &tx,
+            parse_anthropic_sse,
+            |line| line.starts_with("event:"),
+        )
+        .await
     }
 }
 
@@ -335,22 +317,6 @@ mod tests {
             provider.messages_url(),
             "https://api.anthropic.com/v1/messages"
         );
-    }
-
-    #[test]
-    fn from_env_missing_key_returns_auth_error() {
-        let result = AnthropicProvider::from_env(
-            "test",
-            "LAZYLLM_TEST_NONEXISTENT_ANTHROPIC_KEY",
-            vec![],
-        );
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            LlmError::AuthError(msg) => {
-                assert!(msg.contains("LAZYLLM_TEST_NONEXISTENT_ANTHROPIC_KEY"));
-            }
-            other => panic!("Expected AuthError, got: {:?}", other),
-        }
     }
 
     #[test]
@@ -425,9 +391,29 @@ mod tests {
     }
 
     #[test]
-    fn parse_message_start_returns_none() {
+    fn parse_message_start_without_usage_returns_none() {
         let line = r#"data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","model":"claude-sonnet-4-20250514"}}"#;
         assert!(parse_anthropic_sse(line).is_none());
+    }
+
+    #[test]
+    fn parse_message_start_with_usage_returns_input_tokens() {
+        let line = r#"data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","model":"claude-sonnet-4-20250514","usage":{"input_tokens":42}}}"#;
+        let chunk = parse_anthropic_sse(line).unwrap();
+        assert_eq!(
+            chunk,
+            StreamChunk::Usage(super::super::types::TokenUsage::new(42, 0))
+        );
+    }
+
+    #[test]
+    fn parse_message_delta_with_usage_returns_output_tokens() {
+        let line = r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":87}}"#;
+        let chunk = parse_anthropic_sse(line).unwrap();
+        assert_eq!(
+            chunk,
+            StreamChunk::Usage(super::super::types::TokenUsage::new(0, 87))
+        );
     }
 
     #[test]

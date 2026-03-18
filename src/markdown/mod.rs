@@ -33,11 +33,11 @@ pub fn role_label(label: &str, color: Color) -> Line<'static> {
     )])
 }
 
-/// A separator line between messages.
-pub fn separator() -> Line<'static> {
+/// A separator line between messages, using the given colour.
+pub fn separator(color: Color) -> Line<'static> {
     Line::from(Span::styled(
-        "─".repeat(40),
-        Style::default().fg(Color::DarkGray),
+        "\u{2500}".repeat(40),
+        Style::default().fg(color),
     ))
 }
 
@@ -55,7 +55,6 @@ mod tests {
     fn render_markdown_plain_text() {
         let text = render_markdown("Hello world");
         assert!(!text.lines.is_empty());
-        // Should contain the text somewhere in the output
         let content: String = text
             .lines
             .iter()
@@ -69,7 +68,6 @@ mod tests {
     fn render_markdown_bold_text() {
         let text = render_markdown("**bold**");
         assert!(!text.lines.is_empty());
-        // Should contain the word "bold" with styling
         let has_bold = text.lines.iter().any(|line| {
             line.spans.iter().any(|span| {
                 span.content.contains("bold")
@@ -84,7 +82,6 @@ mod tests {
         let md = "```rust\nfn main() {}\n```";
         let text = render_markdown(md);
         assert!(!text.lines.is_empty());
-        // Should contain fn or main somewhere
         let content: String = text
             .lines
             .iter()
@@ -171,7 +168,6 @@ mod tests {
     #[test]
     fn render_plain_empty() {
         let text = render_plain("");
-        // Empty string splits into zero lines via .lines()
         assert!(text.lines.is_empty());
     }
 
@@ -186,10 +182,16 @@ mod tests {
 
     #[test]
     fn separator_creates_line() {
-        let line = separator();
+        let line = separator(Color::DarkGray);
         assert!(!line.spans.is_empty());
         let content: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(content.contains("─"));
+        assert!(content.contains("\u{2500}"));
+    }
+
+    #[test]
+    fn separator_uses_given_color() {
+        let line = separator(Color::Red);
+        assert_eq!(line.spans[0].style.fg, Some(Color::Red));
     }
 
     #[test]

@@ -1,18 +1,25 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::event::types::{Action, Mode};
+use crate::ui::theme::Theme;
 
 use super::Component;
 
 /// Bottom status bar showing mode, keybinding hints, and status.
 #[derive(Debug, Clone)]
 pub struct StatusBar {
-    pub mode: Mode,
-    pub status_message: Option<String>,
+    pub(crate) mode: Mode,
+    pub(crate) status_message: Option<String>,
+}
+
+impl Default for StatusBar {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StatusBar {
@@ -23,18 +30,12 @@ impl StatusBar {
         }
     }
 
-    pub fn with_mode(&self, mode: Mode) -> Self {
-        Self {
-            mode,
-            status_message: self.status_message.clone(),
-        }
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
     }
 
-    pub fn with_status(&self, message: String) -> Self {
-        Self {
-            mode: self.mode,
-            status_message: Some(message),
-        }
+    pub fn set_status(&mut self, message: String) {
+        self.status_message = Some(message);
     }
 
     fn hint_text(&self) -> &str {
@@ -51,36 +52,36 @@ impl Component for StatusBar {
     fn handle_action(&mut self, action: &Action) -> Option<Action> {
         match action {
             Action::SwitchMode(mode) => {
-                *self = self.with_mode(*mode);
+                self.set_mode(*mode);
                 None
             }
             _ => None,
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool) {
-        let mode_color = match self.mode {
-            Mode::Normal => Color::Blue,
-            Mode::Insert => Color::Green,
-            Mode::Visual => Color::Magenta,
-            Mode::Command => Color::Yellow,
+    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool, theme: &Theme) {
+        let (bg, fg) = match self.mode {
+            Mode::Normal => (theme.mode_normal_bg, theme.mode_normal_fg),
+            Mode::Insert => (theme.mode_insert_bg, theme.mode_insert_fg),
+            Mode::Visual => (theme.mode_visual_bg, theme.mode_visual_fg),
+            Mode::Command => (theme.mode_command_bg, theme.mode_command_fg),
         };
 
         let mut spans = vec![
             Span::styled(
                 format!(" {} ", self.mode.label()),
-                Style::default().fg(Color::Black).bg(mode_color),
+                Style::default().fg(fg).bg(bg),
             ),
             Span::styled(
                 format!("  {}", self.hint_text()),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.hint_text),
             ),
         ];
 
         if let Some(ref status) = self.status_message {
             spans.push(Span::styled(
                 format!("  {status}"),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.status_message),
             ));
         }
 
@@ -101,34 +102,32 @@ mod tests {
     }
 
     #[test]
-    fn with_mode_returns_new_instance() {
-        let bar = StatusBar::new();
-        let updated = bar.with_mode(Mode::Insert);
-        assert_eq!(updated.mode, Mode::Insert);
-        assert_eq!(bar.mode, Mode::Normal); // unchanged
+    fn set_mode_updates_in_place() {
+        let mut bar = StatusBar::new();
+        bar.set_mode(Mode::Insert);
+        assert_eq!(bar.mode, Mode::Insert);
     }
 
     #[test]
-    fn with_status_returns_new_instance() {
-        let bar = StatusBar::new();
-        let updated = bar.with_status("streaming...".to_string());
-        assert_eq!(updated.status_message.as_deref(), Some("streaming..."));
-        assert!(bar.status_message.is_none()); // unchanged
+    fn set_status_updates_in_place() {
+        let mut bar = StatusBar::new();
+        bar.set_status("streaming...".to_string());
+        assert_eq!(bar.status_message.as_deref(), Some("streaming..."));
     }
 
     #[test]
     fn hint_text_varies_by_mode() {
-        let bar = StatusBar::new();
+        let mut bar = StatusBar::new();
         assert!(bar.hint_text().contains("quit"));
 
-        let insert = bar.with_mode(Mode::Insert);
-        assert!(insert.hint_text().contains("send"));
+        bar.set_mode(Mode::Insert);
+        assert!(bar.hint_text().contains("send"));
 
-        let visual = bar.with_mode(Mode::Visual);
-        assert!(visual.hint_text().contains("copy"));
+        bar.set_mode(Mode::Visual);
+        assert!(bar.hint_text().contains("copy"));
 
-        let command = bar.with_mode(Mode::Command);
-        assert!(command.hint_text().contains("execute"));
+        bar.set_mode(Mode::Command);
+        assert!(bar.hint_text().contains("execute"));
     }
 
     #[test]

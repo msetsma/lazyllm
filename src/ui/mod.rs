@@ -1,4 +1,5 @@
 pub mod components;
+pub mod theme;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -8,6 +9,7 @@ use crate::app::App;
 /// Renders the entire application UI.
 pub fn render(app: &App, frame: &mut Frame) {
     let size = frame.area();
+    let theme = &app.theme;
 
     // Vertical: model bar (2) | body (fill) | input (3) | status (1)
     let vertical = Layout::default()
@@ -43,13 +45,14 @@ pub fn render(app: &App, frame: &mut Frame) {
     use crate::event::types::FocusTarget;
     use components::Component;
 
-    app.model_selector.render(frame, model_area, false);
-    app.chat_list.render(frame, chat_list_area, app.focus == FocusTarget::ChatList);
-    app.chat_view.render(frame, chat_view_area, app.focus == FocusTarget::ChatView);
-    app.tool_panel.render(frame, tool_panel_area, app.focus == FocusTarget::ToolPanel);
-    app.input_box.render(frame, input_area, app.focus == FocusTarget::Input);
-    app.status_bar.render(frame, status_area, false);
+    app.model_selector.render(frame, model_area, false, theme);
+    app.chat_list.render(frame, chat_list_area, app.focus == FocusTarget::ChatList, theme);
+    app.chat_view.render(frame, chat_view_area, app.focus == FocusTarget::ChatView, theme);
+    app.tool_panel.render(frame, tool_panel_area, app.focus == FocusTarget::ToolPanel, theme);
+    app.input_box.render(frame, input_area, app.focus == FocusTarget::Input, theme);
+    app.status_bar.render(frame, status_area, false, theme);
 
     // Render overlays last (on top)
-    app.help_overlay.render(frame, size, false);
+    app.help_overlay.render(frame, size, false, theme);
+    app.model_popup.render(frame, size, false, theme);
 }

@@ -64,6 +64,7 @@ async fn streaming_collects_full_response() {
         match chunk {
             StreamChunk::Delta(text) => full_text.push_str(&text),
             StreamChunk::Done => break,
+            StreamChunk::Usage(_) => {}
             StreamChunk::Error(e) => panic!("Unexpected error: {e}"),
         }
     }

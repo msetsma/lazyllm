@@ -1,11 +1,3 @@
-mod app;
-mod config;
-mod event;
-mod llm;
-mod markdown;
-mod store;
-mod ui;
-
 use std::io;
 use std::time::Duration;
 
@@ -19,16 +11,11 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
-use app::App;
-use config::{default_config_path, load_config};
-use event::keybindings::resolve_key;
-use event::types::{Action, AppEvent};
-use llm::ProviderRegistry;
-use llm::anthropic::AnthropicProvider;
-use llm::google::GoogleProvider;
-use llm::ollama::OllamaProvider;
-use llm::openai::OpenAiProvider;
-use llm::types::ModelInfo;
+use lazyllm::app::App;
+use lazyllm::config::{default_config_path, load_config};
+use lazyllm::event::keybindings::resolve_key;
+use lazyllm::event::types::{Action, AppEvent};
+use lazyllm::llm;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -55,73 +42,11 @@ async fn main() -> Result<()> {
     tracing::info!("Config loaded from {}", config_path.display());
 
     // Register LLM providers from config
-    let mut registry = ProviderRegistry::new();
-    for (name, provider_config) in &config.providers {
-        let models: Vec<ModelInfo> = provider_config
-            .models
-            .iter()
-            .map(|m| ModelInfo::new(m))
-            .collect();
-
-        match provider_config.provider_type.as_str() {
-            "ollama" => {
-                let base_url = provider_config
-                    .base_url
-                    .as_deref()
-                    .unwrap_or("http://localhost:11434");
-                let provider = OllamaProvider::new(name, base_url, models);
-                registry.register(Box::new(provider));
-                tracing::info!("Registered Ollama provider: {name}");
-            }
-            "anthropic" => {
-                let api_key_env = provider_config.api_key_env.as_deref().unwrap_or("");
-                let base_url = provider_config
-                    .base_url
-                    .as_deref()
-                    .unwrap_or("https://api.anthropic.com/v1/messages");
-                if let Ok(api_key) = std::env::var(api_key_env) {
-                    let provider = AnthropicProvider::new(name, api_key, base_url, models);
-                    registry.register(Box::new(provider));
-                    tracing::info!("Registered Anthropic provider: {name}");
-                } else {
-                    tracing::warn!("Skipping provider {name}: {api_key_env} not set");
-                }
-            }
-            "google" => {
-                let api_key_env = provider_config.api_key_env.as_deref().unwrap_or("");
-                let base_url = provider_config
-                    .base_url
-                    .as_deref()
-                    .unwrap_or("https://generativelanguage.googleapis.com/v1beta");
-                if let Ok(api_key) = std::env::var(api_key_env) {
-                    let provider = GoogleProvider::new(name, api_key, base_url, models);
-                    registry.register(Box::new(provider));
-                    tracing::info!("Registered Google provider: {name}");
-                } else {
-                    tracing::warn!("Skipping provider {name}: {api_key_env} not set");
-                }
-            }
-            _ => {
-                // Default: OpenAI-compatible
-                let api_key_env = provider_config.api_key_env.as_deref().unwrap_or("");
-                let base_url = provider_config
-                    .base_url
-                    .as_deref()
-                    .unwrap_or("https://api.openai.com/v1");
-                if let Ok(api_key) = std::env::var(api_key_env) {
-                    let provider = OpenAiProvider::new(name, api_key, base_url, models);
-                    registry.register(Box::new(provider));
-                    tracing::info!("Registered OpenAI provider: {name}");
-                } else {
-                    tracing::warn!("Skipping provider {name}: {api_key_env} not set");
-                }
-            }
-        }
-    }
+    let registry = llm::build_registry(&config);
 
     // Initialize conversation store
     let data_dir = &config.general.data_dir;
-    let store = store::json_store::JsonStore::new(data_dir)
+    let store = lazyllm::store::json_store::JsonStore::new(data_dir)
         .map_err(|e| color_eyre::eyre::eyre!("Failed to initialize store: {e}"))?;
     tracing::info!("Store initialized at {}", data_dir.display());
 
@@ -137,15 +62,15 @@ async fn main() -> Result<()> {
 
     // Event loop
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let _event_handle = event::spawn_event_loop(tx, Duration::from_millis(250));
+    let _event_handle = lazyllm::event::spawn_event_loop(tx, Duration::from_millis(250));
 
     // Main loop
-    while app.running {
-        terminal.draw(|frame| ui::render(&app, frame))?;
+    while app.is_running() {
+        terminal.draw(|frame| lazyllm::ui::render(&app, frame))?;
 
         if let Some(event) = rx.recv().await {
             let action = match event {
-                AppEvent::Key(key) => resolve_key(key, app.mode, app.focus),
+                AppEvent::Key(key) => resolve_key(key, app.mode(), app.focus()),
                 AppEvent::Resize(w, h) => Action::Resize(w, h),
                 AppEvent::Tick => Action::Tick,
             };

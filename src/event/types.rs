@@ -19,6 +19,7 @@ pub enum Action {
     ToggleHelp,
     ToggleModelSelector,
     SelectModel,
+    CopySelection,
     Resize(u16, u16),
     Tick,
     None,

@@ -32,6 +32,7 @@ pub fn load_config(path: &Path) -> Result<AppConfig> {
 
 /// Saves configuration to the given path, creating parent directories
 /// if needed.
+#[allow(dead_code)] // TODO: will be used when config editing is added
 pub fn save_config(config: &AppConfig, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)

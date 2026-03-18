@@ -11,8 +11,15 @@ A fast, keyboard-driven TUI for chatting with LLMs. Inspired by [lazygit](https:
 - **Vim-like keybindings** — Normal, Insert, Visual, and Command modes
 - **Markdown rendering** — Syntax-highlighted code blocks in the terminal
 - **Conversation persistence** — Auto-saved to disk as JSON
+- **Custom themes** — Full colour customisation via TOML theme files
 - **Configurable** — TOML config with sensible defaults
 - **Fast** — Built in Rust with async I/O
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [UI Reference](docs/ui.md) | Layout, keybindings, commands, themes, and all UI configuration |
 
 ## Installation
 
@@ -253,7 +260,7 @@ cargo build
 cargo test
 ```
 
-The project has 189+ tests covering all modules.
+The project has 267+ tests covering all modules.
 
 ### Project Structure
 
@@ -284,6 +291,7 @@ src/
 │   └── json_store.rs  # JSON file persistence
 └── ui/
     ├── mod.rs         # Layout rendering
+    ├── theme.rs       # Theme loading and colour parsing
     └── components/
         ├── mod.rs         # Component trait
         ├── chat_list.rs   # Conversation sidebar
@@ -302,15 +310,15 @@ src/
 - [x] Markdown rendering with syntax highlighting
 - [x] Conversation persistence
 - [x] Anthropic, Ollama, Google providers
-- [ ] Interactive model/provider switcher
+- [x] Custom themes
+- [x] Command mode with `:` commands
+- [x] Interactive model/provider switcher
 - [ ] MCP (Model Context Protocol) integration
-- [ ] Clipboard copy support
+- [x] Clipboard copy support
 - [ ] Search within conversations
-- [ ] Command mode with `:` commands
 - [ ] System prompt configuration
-- [ ] Token usage tracking
+- [x] Token usage tracking
 - [ ] Conversation export
-- [ ] Custom themes
 - [ ] Image/multimodal support
 
 ## License

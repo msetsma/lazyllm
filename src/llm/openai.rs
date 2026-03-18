@@ -1,11 +1,11 @@
 use async_trait::async_trait;
-use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use super::LlmProvider;
-use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk};
+use super::streaming::{check_http_error, stream_sse_response};
+use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk, TokenUsage};
 
 /// OpenAI-compatible provider. Works with OpenAI API, Azure, and any
 /// compatible endpoint (e.g., local servers with OpenAI-compatible API).
@@ -34,24 +34,6 @@ impl OpenAiProvider {
         }
     }
 
-    /// Create from environment variable and config.
-    pub fn from_env(
-        name: impl Into<String>,
-        api_key_env: &str,
-        base_url: impl Into<String>,
-        models: Vec<String>,
-    ) -> Result<Self, LlmError> {
-        let api_key = std::env::var(api_key_env).map_err(|_| {
-            LlmError::AuthError(format!(
-                "Environment variable {api_key_env} not set"
-            ))
-        })?;
-
-        let model_infos = models.into_iter().map(ModelInfo::new).collect();
-
-        Ok(Self::new(name, api_key, base_url, model_infos))
-    }
-
     fn chat_url(&self) -> String {
         let base = self.base_url.trim_end_matches('/');
         format!("{base}/chat/completions")
@@ -64,10 +46,16 @@ struct OpenAiRequest {
     model: String,
     messages: Vec<OpenAiMessage>,
     stream: bool,
+    stream_options: OpenAiStreamOptions,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiStreamOptions {
+    include_usage: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -80,6 +68,8 @@ struct OpenAiMessage {
 #[derive(Debug, Deserialize)]
 struct OpenAiStreamChunk {
     choices: Vec<OpenAiStreamChoice>,
+    #[serde(default)]
+    usage: Option<OpenAiUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,6 +82,12 @@ struct OpenAiStreamChoice {
 struct OpenAiDelta {
     #[serde(default)]
     content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiUsage {
+    prompt_tokens: u32,
+    completion_tokens: u32,
 }
 
 /// OpenAI error response body.
@@ -111,11 +107,7 @@ impl From<&ChatRequest> for OpenAiRequest {
             .messages
             .iter()
             .map(|m| OpenAiMessage {
-                role: serde_json::to_value(&m.role)
-                    .unwrap()
-                    .as_str()
-                    .unwrap()
-                    .to_string(),
+                role: m.role.as_str().to_string(),
                 content: m.content.clone(),
             })
             .collect();
@@ -124,6 +116,9 @@ impl From<&ChatRequest> for OpenAiRequest {
             model: req.model.clone(),
             messages,
             stream: true,
+            stream_options: OpenAiStreamOptions {
+                include_usage: true,
+            },
             temperature: req.temperature,
             max_tokens: req.max_tokens,
         }
@@ -143,11 +138,19 @@ fn parse_sse_line(line: &str) -> Option<StreamChunk> {
         Err(e) => return Some(StreamChunk::Error(format!("Failed to parse chunk: {e}"))),
     };
 
+    // Usage comes in a separate chunk after finish_reason (when stream_options.include_usage is set)
+    if let Some(usage) = chunk.usage {
+        return Some(StreamChunk::Usage(TokenUsage::new(
+            usage.prompt_tokens,
+            usage.completion_tokens,
+        )));
+    }
+
     if let Some(choice) = chunk.choices.first() {
-        if let Some(ref content) = choice.delta.content {
-            if !content.is_empty() {
-                return Some(StreamChunk::Delta(content.clone()));
-            }
+        if let Some(ref content) = choice.delta.content
+            && !content.is_empty()
+        {
+            return Some(StreamChunk::Delta(content.clone()));
         }
         if choice.finish_reason.as_deref() == Some("stop") {
             return Some(StreamChunk::Done);
@@ -187,57 +190,14 @@ impl LlmProvider for OpenAiProvider {
             .await
             .map_err(|e| LlmError::NetworkError(e.to_string()))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let body_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-
-            let message = serde_json::from_str::<OpenAiErrorResponse>(&body_text)
+        let response = check_http_error(response, |body| {
+            serde_json::from_str::<OpenAiErrorResponse>(body)
                 .map(|e| e.error.message)
-                .unwrap_or(body_text);
+                .ok()
+        })
+        .await?;
 
-            return Err(LlmError::ApiError {
-                status: status.as_u16(),
-                message,
-            });
-        }
-
-        // Stream SSE response
-        let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
-
-        while let Some(chunk_result) = stream.next().await {
-            let bytes = chunk_result.map_err(|e| LlmError::NetworkError(e.to_string()))?;
-            let text = String::from_utf8_lossy(&bytes);
-            buffer.push_str(&text);
-
-            // Process complete lines from the buffer
-            while let Some(newline_pos) = buffer.find('\n') {
-                let line = buffer[..newline_pos].trim().to_string();
-                buffer = buffer[newline_pos + 1..].to_string();
-
-                if line.is_empty() {
-                    continue;
-                }
-
-                if let Some(chunk) = parse_sse_line(&line) {
-                    let is_done = chunk == StreamChunk::Done;
-                    if tx.send(chunk).is_err() {
-                        // Receiver dropped, stop streaming
-                        return Ok(());
-                    }
-                    if is_done {
-                        return Ok(());
-                    }
-                }
-            }
-        }
-
-        // Send Done if stream ended without explicit [DONE]
-        tx.send(StreamChunk::Done).ok();
-        Ok(())
+        stream_sse_response(response, &tx, parse_sse_line, |_| false).await
     }
 }
 
@@ -292,24 +252,6 @@ mod tests {
             vec![],
         );
         assert_eq!(provider.chat_url(), "https://api.openai.com/v1/chat/completions");
-    }
-
-    #[test]
-    fn from_env_missing_key_returns_auth_error() {
-        // Use a unique env var name that won't exist
-        let result = OpenAiProvider::from_env(
-            "test",
-            "LAZYLLM_TEST_NONEXISTENT_KEY_12345",
-            "https://api.openai.com/v1",
-            vec![],
-        );
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            LlmError::AuthError(msg) => {
-                assert!(msg.contains("LAZYLLM_TEST_NONEXISTENT_KEY_12345"));
-            }
-            other => panic!("Expected AuthError, got: {:?}", other),
-        }
     }
 
     #[test]
@@ -392,5 +334,15 @@ mod tests {
             StreamChunk::Error(msg) => assert!(msg.contains("Failed to parse")),
             other => panic!("Expected Error, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_sse_usage_chunk() {
+        let line = r#"data: {"id":"chatcmpl-123","choices":[],"usage":{"prompt_tokens":25,"completion_tokens":42,"total_tokens":67}}"#;
+        let chunk = parse_sse_line(line).unwrap();
+        assert_eq!(
+            chunk,
+            StreamChunk::Usage(super::super::types::TokenUsage::new(25, 42))
+        );
     }
 }
