@@ -28,12 +28,22 @@ pub fn render(app: &App, frame: &mut Frame) {
     let status_area = vertical[3];
 
     // Horizontal body: chat list | chat view | tool panel
+    let sidebar_width = if app.config.ui.show_sidebar {
+        app.config.ui.sidebar_width
+    } else {
+        0
+    };
+    let tool_panel_width = if app.config.ui.show_tool_panel {
+        app.config.ui.tool_panel_width
+    } else {
+        0
+    };
     let body_layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(app.config.ui.sidebar_width),
+            Constraint::Length(sidebar_width),
             Constraint::Min(20),
-            Constraint::Length(app.config.ui.tool_panel_width),
+            Constraint::Length(tool_panel_width),
         ])
         .split(body_area);
 
@@ -46,9 +56,13 @@ pub fn render(app: &App, frame: &mut Frame) {
     use components::Component;
 
     app.model_selector.render(frame, model_area, false, theme);
-    app.chat_list.render(frame, chat_list_area, app.focus == FocusTarget::ChatList, theme);
+    if app.config.ui.show_sidebar {
+        app.chat_list.render(frame, chat_list_area, app.focus == FocusTarget::ChatList, theme);
+    }
     app.chat_view.render(frame, chat_view_area, app.focus == FocusTarget::ChatView, theme);
-    app.tool_panel.render(frame, tool_panel_area, app.focus == FocusTarget::ToolPanel, theme);
+    if app.config.ui.show_tool_panel {
+        app.tool_panel.render(frame, tool_panel_area, app.focus == FocusTarget::ToolPanel, theme);
+    }
     app.input_box.render(frame, input_area, app.focus == FocusTarget::Input, theme);
     app.status_bar.render(frame, status_area, false, theme);
 

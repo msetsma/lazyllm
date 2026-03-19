@@ -1,0 +1,132 @@
+# lazyllm configuration
+# Copy this file to ~/.config/lazyllm/config.toml and uncomment the settings
+# you want to change. All values shown are the defaults.
+
+# ─── General ────────────────────────────────────────────────────────────────
+
+[general]
+
+# Default LLM provider (must match a key in [providers] if providers are configured)
+# default_provider = "openai"
+
+# Default model to use
+# default_model = "gpt-4o"
+
+# Persist conversations to disk
+# save_conversations = true
+
+# Directory for saved conversations and app data
+# data_dir = "~/.local/share/lazyllm"          # XDG default on Linux
+
+# Temperature for LLM requests (0.0–2.0). Omit to use the provider's default.
+# temperature = 0.7
+
+# Max tokens for LLM responses. Omit to use the provider's default.
+# max_tokens = 4096
+
+# Global system prompt prepended to all conversations. Omit for none.
+# system_prompt = "You are a helpful assistant."
+
+# Default context to load on startup (name of a file in contexts_dir). Omit for none.
+# default_context = "my-context"
+
+# Directory containing reusable context files
+# contexts_dir = "~/.config/lazyllm/contexts"
+
+# ─── UI ─────────────────────────────────────────────────────────────────────
+
+[ui]
+
+# Color theme ("default" is the only built-in theme for now)
+# theme = "default"
+
+# Show the tool-call side panel
+# show_tool_panel = true
+
+# Show the conversation sidebar
+# show_sidebar = true
+
+# Show timestamps on messages
+# show_timestamps = false
+
+# Render markdown formatting in assistant responses
+# markdown_rendering = true
+
+# Sidebar width as a percentage of the terminal width (1–100)
+# sidebar_width = 25
+
+# Tool panel width as a percentage of the terminal width (1–100)
+# tool_panel_width = 20
+
+# ─── Features ───────────────────────────────────────────────────────────────
+
+[features]
+
+# Convert LaTeX math expressions to Unicode symbols
+# latex_rendering = true
+
+# Render markdown tables with box-drawing characters
+# table_rendering = true
+
+# Enable "/" search within conversations
+# search = true
+
+# Enable the :context command for reusable system prompts
+# contexts = true
+
+# Enable MCP (Model Context Protocol) tool integration
+# mcp_servers = true
+
+# ─── Providers ──────────────────────────────────────────────────────────────
+# Define one or more LLM providers. The key becomes the provider name you
+# reference in general.default_provider.
+#
+# provider_type: "openai" | "anthropic" | "ollama" | "google"
+# api_key_env:   environment variable that holds the API key
+# base_url:      API base URL (required for ollama / custom endpoints)
+# models:        list of model IDs available from this provider
+# default_model: model to use when this provider is active (overrides general.default_model)
+
+# [providers.openai]
+# provider_type = "openai"
+# api_key_env = "OPENAI_API_KEY"
+# base_url = "https://api.openai.com/v1"
+# models = ["gpt-4o", "gpt-4o-mini", "o3-mini"]
+# default_model = "gpt-4o"
+
+# [providers.anthropic]
+# provider_type = "anthropic"
+# api_key_env = "ANTHROPIC_API_KEY"
+# models = ["claude-sonnet-4-20250514", "claude-haiku-4-20250414"]
+# default_model = "claude-sonnet-4-20250514"
+
+# [providers.ollama]
+# provider_type = "ollama"
+# base_url = "http://localhost:11434"
+# models = ["llama3", "codellama"]
+
+# [providers.google]
+# provider_type = "google"
+# api_key_env = "GOOGLE_API_KEY"
+# models = ["gemini-2.5-pro", "gemini-2.5-flash"]
+
+# ─── MCP Servers ────────────────────────────────────────────────────────────
+# Define MCP tool servers. Each [[mcp.servers]] entry is a separate server.
+#
+# name:      display name for the server
+# command:   executable to launch
+# args:      command-line arguments
+# env:       environment variables passed to the server process
+# transport: "stdio" (default) or "sse"
+# url:       SSE endpoint URL (only used when transport = "sse")
+
+# [[mcp.servers]]
+# name = "filesystem"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+#
+# [[mcp.servers]]
+# name = "custom-sse"
+# command = "/usr/bin/my-server"
+# transport = "sse"
+# url = "http://localhost:8080/sse"

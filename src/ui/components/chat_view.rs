@@ -54,6 +54,7 @@ pub struct ChatView {
     pub(crate) scroll_offset: u16,
     pub(crate) show_timestamps: bool,
     pub(crate) render_options: RenderOptions,
+    pub(crate) markdown_rendering: bool,
     pub(crate) search_query: String,
     pub(crate) search_matches: Vec<SearchMatch>,
     pub(crate) search_current: usize,
@@ -72,10 +73,15 @@ impl ChatView {
             scroll_offset: 0,
             show_timestamps: false,
             render_options: RenderOptions::default(),
+            markdown_rendering: true,
             search_query: String::new(),
             search_matches: Vec::new(),
             search_current: 0,
         }
+    }
+
+    pub fn set_markdown_rendering(&mut self, enabled: bool) {
+        self.markdown_rendering = enabled;
     }
 
     pub fn set_render_options(&mut self, opts: RenderOptions) {
@@ -228,12 +234,12 @@ impl ChatView {
                 lines.push(markdown::role_label(label, color));
             }
 
-            // Message content — assistant gets LaTeX/table preprocessing
+            // Message content — assistant gets markdown + LaTeX/table preprocessing (if enabled)
             let content_lines: Vec<Line<'static>> = match msg.role {
-                MessageRole::Assistant => {
+                MessageRole::Assistant if self.markdown_rendering => {
                     markdown::render_markdown_preprocessed(&msg.content, self.render_options)
                 }
-                MessageRole::User | MessageRole::System => {
+                MessageRole::User | MessageRole::System | MessageRole::Assistant => {
                     let rendered = markdown::render_plain(&msg.content);
                     rendered.lines.into_iter().collect()
                 }

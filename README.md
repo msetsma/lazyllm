@@ -313,7 +313,7 @@ src/
 - [x] Custom themes
 - [x] Command mode with `:` commands
 - [x] Interactive model/provider switcher
-- [ ] MCP (Model Context Protocol) integration
+- [x] MCP (Model Context Protocol) integration
 - [x] Clipboard copy support
 - [ ] Search within conversations
 - [ ] System prompt configuration

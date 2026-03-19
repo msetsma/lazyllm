@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+const VALID_PROVIDER_TYPES: &[&str] = &["openai", "anthropic", "ollama", "google"];
+
 /// Top-level application configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct AppConfig {
@@ -15,6 +17,74 @@ pub struct AppConfig {
     pub providers: HashMap<String, ProviderConfig>,
     #[serde(default)]
     pub mcp: McpConfig,
+}
+
+impl AppConfig {
+    /// Validates all config values, returning collected errors.
+    /// Warnings (non-fatal) are emitted via `tracing::warn`.
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        // general.temperature: 0.0–2.0
+        if let Some(t) = self.general.temperature {
+            if !(0.0..=2.0).contains(&t) {
+                errors.push(format!(
+                    "general.temperature = {t} is out of range (must be 0.0–2.0)"
+                ));
+            }
+        }
+
+        // general.max_tokens: > 0
+        if let Some(mt) = self.general.max_tokens {
+            if mt == 0 {
+                errors.push("general.max_tokens must be greater than 0".to_string());
+            }
+        }
+
+        // ui.sidebar_width: 1–100
+        if self.ui.sidebar_width == 0 || self.ui.sidebar_width > 100 {
+            errors.push(format!(
+                "ui.sidebar_width = {} is out of range (must be 1–100)",
+                self.ui.sidebar_width
+            ));
+        }
+
+        // ui.tool_panel_width: 1–100
+        if self.ui.tool_panel_width == 0 || self.ui.tool_panel_width > 100 {
+            errors.push(format!(
+                "ui.tool_panel_width = {} is out of range (must be 1–100)",
+                self.ui.tool_panel_width
+            ));
+        }
+
+        // providers.*.provider_type
+        for (name, provider) in &self.providers {
+            if !VALID_PROVIDER_TYPES.contains(&provider.provider_type.as_str()) {
+                errors.push(format!(
+                    "providers.{name}.provider_type = \"{}\" is invalid (must be one of: {})",
+                    provider.provider_type,
+                    VALID_PROVIDER_TYPES.join(", ")
+                ));
+            }
+        }
+
+        // general.default_provider should match a providers key (warning only)
+        if !self.providers.is_empty()
+            && !self.providers.contains_key(&self.general.default_provider)
+        {
+            tracing::warn!(
+                "general.default_provider = \"{}\" does not match any configured provider (available: {})",
+                self.general.default_provider,
+                self.providers.keys().cloned().collect::<Vec<_>>().join(", ")
+            );
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 }
 
 /// Feature toggles for optional functionality.
@@ -63,6 +133,15 @@ pub struct GeneralConfig {
     pub default_context: Option<String>,
     #[serde(default = "default_contexts_dir")]
     pub contexts_dir: PathBuf,
+    /// Default temperature for LLM requests (0.0–2.0). None = provider default.
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    /// Default max tokens for LLM responses. None = provider default.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// Global system prompt prepended to all conversations.
+    #[serde(default)]
+    pub system_prompt: Option<String>,
 }
 
 impl Default for GeneralConfig {
@@ -74,6 +153,9 @@ impl Default for GeneralConfig {
             data_dir: default_data_dir(),
             default_context: None,
             contexts_dir: default_contexts_dir(),
+            temperature: None,
+            max_tokens: None,
+            system_prompt: None,
         }
     }
 }
@@ -84,8 +166,12 @@ pub struct UiConfig {
     pub theme: String,
     #[serde(default = "default_true")]
     pub show_tool_panel: bool,
+    #[serde(default = "default_true")]
+    pub show_sidebar: bool,
     #[serde(default)]
     pub show_timestamps: bool,
+    #[serde(default = "default_true")]
+    pub markdown_rendering: bool,
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: u16,
     #[serde(default = "default_tool_panel_width")]
@@ -97,7 +183,9 @@ impl Default for UiConfig {
         Self {
             theme: default_theme(),
             show_tool_panel: true,
+            show_sidebar: true,
             show_timestamps: false,
+            markdown_rendering: true,
             sidebar_width: default_sidebar_width(),
             tool_panel_width: default_tool_panel_width(),
         }
@@ -116,6 +204,9 @@ pub struct ProviderConfig {
     pub base_url: Option<String>,
     #[serde(default)]
     pub models: Vec<String>,
+    /// Default model for this provider (overrides general.default_model when this provider is active).
+    #[serde(default)]
+    pub default_model: Option<String>,
 }
 
 fn default_provider_type() -> String {
@@ -189,10 +280,20 @@ mod tests {
         assert_eq!(config.general.default_provider, "openai");
         assert_eq!(config.general.default_model, "gpt-4o");
         assert!(config.general.save_conversations);
+        assert!(config.general.temperature.is_none());
+        assert!(config.general.max_tokens.is_none());
+        assert!(config.general.system_prompt.is_none());
         assert_eq!(config.ui.sidebar_width, 25);
         assert_eq!(config.ui.tool_panel_width, 20);
         assert!(config.ui.show_tool_panel);
+        assert!(config.ui.show_sidebar);
+        assert!(config.ui.markdown_rendering);
         assert!(!config.ui.show_timestamps);
+        assert!(config.features.latex_rendering);
+        assert!(config.features.table_rendering);
+        assert!(config.features.search);
+        assert!(config.features.contexts);
+        assert!(config.features.mcp_servers);
         assert!(config.providers.is_empty());
         assert!(config.mcp.servers.is_empty());
     }
@@ -269,5 +370,121 @@ url = "http://localhost:8080/sse"
     fn empty_toml_produces_defaults() {
         let config: AppConfig = toml::from_str("").unwrap();
         assert_eq!(config, AppConfig::default());
+    }
+
+    #[test]
+    fn default_config_passes_validation() {
+        AppConfig::default().validate().unwrap();
+    }
+
+    #[test]
+    fn temperature_boundary_values() {
+        let mut config = AppConfig::default();
+
+        config.general.temperature = Some(0.0);
+        assert!(config.validate().is_ok());
+
+        config.general.temperature = Some(2.0);
+        assert!(config.validate().is_ok());
+
+        config.general.temperature = Some(-0.1);
+        assert!(config.validate().is_err());
+
+        config.general.temperature = Some(2.1);
+        let errs = config.validate().unwrap_err();
+        assert!(errs[0].contains("temperature"));
+    }
+
+    #[test]
+    fn max_tokens_zero_is_error() {
+        let mut config = AppConfig::default();
+        config.general.max_tokens = Some(0);
+        let errs = config.validate().unwrap_err();
+        assert!(errs[0].contains("max_tokens"));
+    }
+
+    #[test]
+    fn max_tokens_positive_is_ok() {
+        let mut config = AppConfig::default();
+        config.general.max_tokens = Some(1);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn sidebar_width_out_of_range() {
+        let mut config = AppConfig::default();
+
+        config.ui.sidebar_width = 0;
+        assert!(config.validate().is_err());
+
+        config.ui.sidebar_width = 101;
+        assert!(config.validate().is_err());
+
+        config.ui.sidebar_width = 1;
+        assert!(config.validate().is_ok());
+
+        config.ui.sidebar_width = 100;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn tool_panel_width_out_of_range() {
+        let mut config = AppConfig::default();
+
+        config.ui.tool_panel_width = 0;
+        assert!(config.validate().is_err());
+
+        config.ui.tool_panel_width = 101;
+        assert!(config.validate().is_err());
+
+        config.ui.tool_panel_width = 50;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn invalid_provider_type_is_error() {
+        let mut config = AppConfig::default();
+        config.providers.insert(
+            "bad".to_string(),
+            ProviderConfig {
+                provider_type: "azure".to_string(),
+                api_key_env: None,
+                base_url: None,
+                models: vec![],
+                default_model: None,
+            },
+        );
+        let errs = config.validate().unwrap_err();
+        assert!(errs[0].contains("provider_type"));
+        assert!(errs[0].contains("azure"));
+    }
+
+    #[test]
+    fn valid_provider_types_accepted() {
+        for pt in &["openai", "anthropic", "ollama", "google"] {
+            let mut config = AppConfig::default();
+            config.providers.insert(
+                pt.to_string(),
+                ProviderConfig {
+                    provider_type: pt.to_string(),
+                    api_key_env: None,
+                    base_url: None,
+                    models: vec![],
+                    default_model: None,
+                },
+            );
+            assert!(config.validate().is_ok(), "provider_type '{pt}' should be valid");
+        }
+    }
+
+    #[test]
+    fn multiple_errors_collected() {
+        let mut config = AppConfig::default();
+        config.general.temperature = Some(5.0);
+        config.general.max_tokens = Some(0);
+        config.ui.sidebar_width = 0;
+
+        let errs = config.validate().unwrap_err();
+        assert_eq!(errs.len(), 3);
     }
 }

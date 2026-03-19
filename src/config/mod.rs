@@ -2,9 +2,12 @@ pub mod types;
 
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{Context, Result};
+use color_eyre::eyre::{self, Context, Result};
 
 use types::AppConfig;
+
+/// The example config embedded at compile time, used to seed first-run config files.
+const EXAMPLE_CONFIG: &str = include_str!("../../config.example.toml");
 
 /// Returns the default config file path: ~/.config/lazyllm/config.toml
 pub fn default_config_path() -> PathBuf {
@@ -14,10 +17,28 @@ pub fn default_config_path() -> PathBuf {
         .join("config.toml")
 }
 
+/// Writes the example config to the given path if it does not already exist.
+/// Failures are logged but not fatal — the app can run with in-memory defaults.
+fn write_default_config(path: &Path) {
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!("Could not create config directory {}: {e}", parent.display());
+            return;
+        }
+    }
+    if let Err(e) = std::fs::write(path, EXAMPLE_CONFIG) {
+        tracing::warn!("Could not write default config to {}: {e}", path.display());
+    } else {
+        tracing::info!("Created default config at {}", path.display());
+    }
+}
+
 /// Loads configuration from the given path, falling back to defaults
-/// if the file doesn't exist.
+/// if the file doesn't exist. On first run the example config is written
+/// to disk so users have a documented starting point.
 pub fn load_config(path: &Path) -> Result<AppConfig> {
     if !path.exists() {
+        write_default_config(path);
         return Ok(AppConfig::default());
     }
 
@@ -26,6 +47,14 @@ pub fn load_config(path: &Path) -> Result<AppConfig> {
 
     let config: AppConfig =
         toml::from_str(&contents).wrap_err_with(|| format!("Failed to parse {}", path.display()))?;
+
+    config.validate().map_err(|errors| {
+        eyre::eyre!(
+            "Config validation failed ({}): \n  - {}",
+            path.display(),
+            errors.join("\n  - ")
+        )
+    })?;
 
     Ok(config)
 }
@@ -91,5 +120,46 @@ mod tests {
 
         let result = load_config(&path);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn example_config_parses_to_defaults() {
+        let config: AppConfig = toml::from_str(EXAMPLE_CONFIG).unwrap();
+        assert_eq!(config, AppConfig::default());
+    }
+
+    #[test]
+    fn load_config_writes_default_on_first_run() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("lazyllm").join("config.toml");
+
+        let config = load_config(&path).unwrap();
+        assert_eq!(config, AppConfig::default());
+        assert!(path.exists(), "default config should have been written");
+    }
+
+    #[test]
+    fn load_config_rejects_invalid_values() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[general]
+temperature = 5.0
+max_tokens = 0
+
+[ui]
+sidebar_width = 0
+"#,
+        )
+        .unwrap();
+
+        let result = load_config(&path);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("temperature"), "should mention temperature");
+        assert!(msg.contains("max_tokens"), "should mention max_tokens");
+        assert!(msg.contains("sidebar_width"), "should mention sidebar_width");
     }
 }

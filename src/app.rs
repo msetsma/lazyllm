@@ -96,6 +96,7 @@ impl App {
             latex: config.features.latex_rendering,
             tables: config.features.table_rendering,
         });
+        chat_view.set_markdown_rendering(config.ui.markdown_rendering);
 
         // Load contexts from disk (if enabled)
         let contexts = if config.features.contexts {
@@ -614,10 +615,21 @@ impl App {
             }
         };
 
-        let model = self.config.general.default_model.clone();
+        // Resolve model: per-provider default_model > general.default_model
+        let model = self
+            .config
+            .providers
+            .get(provider_name)
+            .and_then(|p| p.default_model.clone())
+            .unwrap_or_else(|| self.config.general.default_model.clone());
+
+        // Prepend global system prompt if configured
+        let mut messages = Vec::new();
+        if let Some(ref prompt) = self.config.general.system_prompt {
+            messages.push(Message::system(prompt.clone()));
+        }
 
         // Prepend context messages if a context is active
-        let mut messages = Vec::new();
         if let Some(ref ctx_name) = self.active_context {
             if let Some(ctx) = self.contexts.get(ctx_name) {
                 messages.extend(ctx.build_messages());
@@ -633,7 +645,13 @@ impl App {
             .map(|m| m.tool_definitions())
             .unwrap_or_default();
 
-        let request = ChatRequest::new(model.clone(), messages).with_tools(tool_defs);
+        let mut request = ChatRequest::new(model.clone(), messages).with_tools(tool_defs);
+        if let Some(temp) = self.config.general.temperature {
+            request = request.with_temperature(temp);
+        }
+        if let Some(max) = self.config.general.max_tokens {
+            request = request.with_max_tokens(max);
+        }
 
         let (tx, rx) = mpsc::unbounded_channel();
         self.stream_rx = Some(rx);
