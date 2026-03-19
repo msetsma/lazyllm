@@ -44,9 +44,9 @@ async fn main() -> Result<()> {
     // Register LLM providers from config
     let registry = llm::build_registry(&config);
 
-    // Initialize conversation store
+    // Initialize conversation store (SQLite)
     let data_dir = &config.general.data_dir;
-    let store = lazyllm::store::json_store::JsonStore::new(data_dir)
+    let store = lazyllm::store::sqlite_store::SqliteStore::new(data_dir)
         .map_err(|e| color_eyre::eyre::eyre!("Failed to initialize store: {e}"))?;
     tracing::info!("Store initialized at {}", data_dir.display());
 

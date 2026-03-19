@@ -1,12 +1,12 @@
 use uuid::Uuid;
 
 use crate::llm::types::Message;
-use crate::store::json_store::JsonStore;
+use crate::store::Store;
 use crate::store::types::Conversation;
 
 /// Manages conversation persistence and state.
 pub struct ConversationManager {
-    pub store: Option<JsonStore>,
+    pub store: Option<Box<dyn Store>>,
     pub active_conversation: Option<Conversation>,
     pub conversation_ids: Vec<Uuid>,
 }
@@ -32,8 +32,8 @@ impl ConversationManager {
         }
     }
 
-    pub fn with_store(mut self, store: JsonStore) -> Self {
-        self.store = Some(store);
+    pub fn with_store(mut self, store: impl Store + 'static) -> Self {
+        self.store = Some(Box::new(store));
         self
     }
 

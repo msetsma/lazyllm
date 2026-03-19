@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use super::types::{Conversation, ConversationSummary};
+use super::{Store, StoreError};
 
 /// File-based conversation store using JSON files.
 ///
@@ -24,8 +25,18 @@ impl JsonStore {
         self.conversations_dir.join(format!("{id}.json"))
     }
 
+    fn load_from_path(&self, path: &Path) -> Result<Conversation, StoreError> {
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| StoreError::Io(e.to_string()))?;
+        let conversation: Conversation = serde_json::from_str(&contents)
+            .map_err(|e| StoreError::Deserialize(e.to_string()))?;
+        Ok(conversation)
+    }
+}
+
+impl Store for JsonStore {
     /// List all conversation summaries, sorted by updated_at descending.
-    pub fn list(&self) -> Result<Vec<ConversationSummary>, StoreError> {
+    fn list(&self) -> Result<Vec<ConversationSummary>, StoreError> {
         let mut summaries = Vec::new();
 
         let entries = std::fs::read_dir(&self.conversations_dir)
@@ -53,13 +64,13 @@ impl JsonStore {
     }
 
     /// Load a full conversation by ID.
-    pub fn load(&self, id: Uuid) -> Result<Conversation, StoreError> {
+    fn load(&self, id: Uuid) -> Result<Conversation, StoreError> {
         let path = self.conversation_path(id);
         self.load_from_path(&path)
     }
 
     /// Save a conversation (creates or overwrites).
-    pub fn save(&self, conversation: &Conversation) -> Result<(), StoreError> {
+    fn save(&self, conversation: &Conversation) -> Result<(), StoreError> {
         let path = self.conversation_path(conversation.id);
         let json = serde_json::to_string_pretty(conversation)
             .map_err(|e| StoreError::Serialize(e.to_string()))?;
@@ -69,7 +80,7 @@ impl JsonStore {
     }
 
     /// Delete a conversation by ID.
-    pub fn delete(&self, id: Uuid) -> Result<(), StoreError> {
+    fn delete(&self, id: Uuid) -> Result<(), StoreError> {
         let path = self.conversation_path(id);
         if path.exists() {
             std::fs::remove_file(&path)
@@ -77,37 +88,7 @@ impl JsonStore {
         }
         Ok(())
     }
-
-    fn load_from_path(&self, path: &Path) -> Result<Conversation, StoreError> {
-        let contents = std::fs::read_to_string(path)
-            .map_err(|e| StoreError::Io(e.to_string()))?;
-        let conversation: Conversation = serde_json::from_str(&contents)
-            .map_err(|e| StoreError::Deserialize(e.to_string()))?;
-        Ok(conversation)
-    }
 }
-
-/// Errors from the conversation store.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StoreError {
-    Io(String),
-    Serialize(String),
-    Deserialize(String),
-    NotFound(String),
-}
-
-impl std::fmt::Display for StoreError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StoreError::Io(msg) => write!(f, "IO error: {msg}"),
-            StoreError::Serialize(msg) => write!(f, "Serialize error: {msg}"),
-            StoreError::Deserialize(msg) => write!(f, "Deserialize error: {msg}"),
-            StoreError::NotFound(msg) => write!(f, "Not found: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for StoreError {}
 
 #[cfg(test)]
 mod tests {

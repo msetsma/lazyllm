@@ -11,7 +11,7 @@ use crate::event::types::{Action, FocusTarget, Mode};
 use crate::llm::ProviderRegistry;
 use crate::llm::types::{ChatRequest, Message, StreamChunk, ToolCall, TokenUsage};
 use crate::mcp::McpManager;
-use crate::store::json_store::JsonStore;
+use crate::store::Store;
 use crate::ui::components::chat_list::ChatList;
 use crate::ui::components::chat_view::{ChatMessage, ChatView, MessageRole};
 use crate::command::{self, Command};
@@ -144,7 +144,7 @@ impl App {
     }
 
     /// Initialize with a store, loading existing conversations.
-    pub fn with_store(mut self, store: JsonStore) -> Self {
+    pub fn with_store(mut self, store: impl Store + 'static) -> Self {
         self.conversations = ConversationManager::new().with_store(store);
         if let Some(list) = self.conversations.load_conversation_list() {
             self.chat_list = ChatList::from_items(list.titles);
@@ -903,6 +903,7 @@ fn copy_to_clipboard(text: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::json_store::JsonStore;
     use crate::store::types::Conversation;
     use tempfile::TempDir;
 
