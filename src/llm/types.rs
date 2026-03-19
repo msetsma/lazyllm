@@ -144,12 +144,24 @@ impl ChatRequest {
 }
 
 /// Token usage statistics returned by providers.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TokenUsage {
     /// Tokens consumed by the prompt/input.
     pub input_tokens: u32,
     /// Tokens generated in the response/output.
     pub output_tokens: u32,
+    /// Tokens read from cache (Anthropic prompt caching).
+    pub cache_read_tokens: u32,
+    /// Tokens written to cache (Anthropic prompt caching).
+    pub cache_creation_tokens: u32,
+    /// Estimated cost in USD for this turn.
+    pub cost: f64,
+    /// Response latency in milliseconds.
+    pub duration_ms: Option<u64>,
+    /// The model that produced this response.
+    pub model: Option<String>,
+    /// The provider that produced this response.
+    pub provider: Option<String>,
 }
 
 impl TokenUsage {
@@ -157,12 +169,36 @@ impl TokenUsage {
         Self {
             input_tokens,
             output_tokens,
+            ..Default::default()
         }
     }
 
     /// Total tokens (input + output).
     pub fn total(&self) -> u32 {
         self.input_tokens + self.output_tokens
+    }
+
+    /// Total cache tokens (read + creation).
+    pub fn cache_total(&self) -> u32 {
+        self.cache_read_tokens + self.cache_creation_tokens
+    }
+
+    /// Accumulate another usage into this one (for partial usage like Anthropic split events).
+    pub fn accumulate(&mut self, other: &TokenUsage) {
+        self.input_tokens += other.input_tokens;
+        self.output_tokens += other.output_tokens;
+        self.cache_read_tokens += other.cache_read_tokens;
+        self.cache_creation_tokens += other.cache_creation_tokens;
+        self.cost += other.cost;
+        if other.duration_ms.is_some() {
+            self.duration_ms = other.duration_ms;
+        }
+        if other.model.is_some() {
+            self.model.clone_from(&other.model);
+        }
+        if other.provider.is_some() {
+            self.provider.clone_from(&other.provider);
+        }
     }
 }
 
@@ -174,12 +210,19 @@ impl std::fmt::Display for TokenUsage {
             self.input_tokens,
             self.output_tokens,
             self.total()
-        )
+        )?;
+        if self.cache_total() > 0 {
+            write!(f, " (cache: {})", self.cache_total())?;
+        }
+        if self.cost > 0.0 {
+            write!(f, " ${:.4}", self.cost)?;
+        }
+        Ok(())
     }
 }
 
 /// Incremental chunks received during streaming.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum StreamChunk {
     /// A text delta to append to the current response.
     Delta(String),
@@ -392,7 +435,10 @@ mod tests {
         let usage = TokenUsage::default();
         assert_eq!(usage.input_tokens, 0);
         assert_eq!(usage.output_tokens, 0);
+        assert_eq!(usage.cache_read_tokens, 0);
+        assert_eq!(usage.cache_creation_tokens, 0);
         assert_eq!(usage.total(), 0);
+        assert_eq!(usage.cache_total(), 0);
     }
 
     #[test]
@@ -402,6 +448,82 @@ mod tests {
         assert!(display.contains("150in"));
         assert!(display.contains("423out"));
         assert!(display.contains("573 tokens"));
+        // No cache or cost by default
+        assert!(!display.contains("cache"));
+        assert!(!display.contains("$"));
+    }
+
+    #[test]
+    fn token_usage_display_with_cache_and_cost() {
+        let mut usage = TokenUsage::new(100, 200);
+        usage.cache_read_tokens = 50;
+        usage.cost = 0.0035;
+        let display = format!("{usage}");
+        assert!(display.contains("cache: 50"));
+        assert!(display.contains("$0.0035"));
+    }
+
+    #[test]
+    fn token_usage_accumulate() {
+        let mut total = TokenUsage::new(10, 20);
+        let partial = TokenUsage {
+            input_tokens: 0,
+            output_tokens: 30,
+            cache_read_tokens: 5,
+            cost: 0.001,
+            model: Some("gpt-4o".to_string()),
+            ..Default::default()
+        };
+        total.accumulate(&partial);
+        assert_eq!(total.input_tokens, 10);
+        assert_eq!(total.output_tokens, 50);
+        assert_eq!(total.cache_read_tokens, 5);
+        assert!((total.cost - 0.001).abs() < f64::EPSILON);
+        assert_eq!(total.model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn token_usage_accumulate_preserves_duration() {
+        let mut total = TokenUsage::default();
+        let partial = TokenUsage {
+            duration_ms: Some(150),
+            ..Default::default()
+        };
+        total.accumulate(&partial);
+        assert_eq!(total.duration_ms, Some(150));
+
+        // Second accumulate overwrites duration
+        let partial2 = TokenUsage {
+            duration_ms: Some(200),
+            ..Default::default()
+        };
+        total.accumulate(&partial2);
+        assert_eq!(total.duration_ms, Some(200));
+    }
+
+    #[test]
+    fn token_usage_accumulate_no_overwrite_when_none() {
+        let mut total = TokenUsage {
+            model: Some("gpt-4o".to_string()),
+            provider: Some("openai".to_string()),
+            ..Default::default()
+        };
+        let partial = TokenUsage {
+            input_tokens: 10,
+            ..Default::default()
+        };
+        total.accumulate(&partial);
+        // model/provider should not be overwritten by None
+        assert_eq!(total.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(total.provider.as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn token_usage_cache_total() {
+        let mut usage = TokenUsage::default();
+        usage.cache_read_tokens = 100;
+        usage.cache_creation_tokens = 50;
+        assert_eq!(usage.cache_total(), 150);
     }
 
     #[test]

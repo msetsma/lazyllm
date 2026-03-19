@@ -16,6 +16,18 @@ pub struct Conversation {
     pub updated_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_name: Option<String>,
+    #[serde(default)]
+    pub total_input_tokens: u32,
+    #[serde(default)]
+    pub total_output_tokens: u32,
+    #[serde(default)]
+    pub total_cache_tokens: u32,
+    #[serde(default)]
+    pub total_cost: f64,
+    #[serde(default)]
+    pub turn_count: u32,
+    #[serde(default)]
+    pub context_estimate: u32,
 }
 
 impl Conversation {
@@ -30,6 +42,12 @@ impl Conversation {
             created_at: now,
             updated_at: now,
             context_name: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_tokens: 0,
+            total_cost: 0.0,
+            turn_count: 0,
+            context_estimate: 0,
         }
     }
 
@@ -59,6 +77,10 @@ impl Conversation {
             message_count: self.messages.len(),
             created_at: self.created_at,
             updated_at: self.updated_at,
+            total_input_tokens: self.total_input_tokens,
+            total_output_tokens: self.total_output_tokens,
+            total_cost: self.total_cost,
+            turn_count: self.turn_count,
         }
     }
 
@@ -89,6 +111,36 @@ pub struct ConversationSummary {
     pub message_count: usize,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub total_input_tokens: u32,
+    #[serde(default)]
+    pub total_output_tokens: u32,
+    #[serde(default)]
+    pub total_cost: f64,
+    #[serde(default)]
+    pub turn_count: u32,
+}
+
+/// A pre-compaction snapshot of a conversation's message history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Checkpoint {
+    pub id: i64,
+    pub conversation_id: Uuid,
+    pub snapshot_json: String,
+    pub reason: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Per-message usage data stored alongside a message in the DB.
+#[derive(Debug, Clone, Default)]
+pub struct MessageUsage {
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
+    pub cache_read_tokens: Option<u32>,
+    pub cache_creation_tokens: Option<u32>,
+    pub cost: Option<f64>,
+    pub duration_ms: Option<u64>,
+    pub model: Option<String>,
 }
 
 #[cfg(test)]

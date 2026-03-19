@@ -14,6 +14,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub features: FeaturesConfig,
     #[serde(default)]
+    pub conversation: ConversationConfig,
+    #[serde(default)]
+    pub usage: UsageConfig,
+    #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
     #[serde(default)]
     pub mcp: McpConfig,
@@ -66,6 +70,32 @@ impl AppConfig {
                     VALID_PROVIDER_TYPES.join(", ")
                 ));
             }
+        }
+
+        // conversation.compaction_strategy
+        let valid_strategies = ["auto", "none", "truncation", "summarization"];
+        if !valid_strategies.contains(&self.conversation.compaction_strategy.as_str()) {
+            errors.push(format!(
+                "conversation.compaction_strategy = \"{}\" is invalid (must be one of: {})",
+                self.conversation.compaction_strategy,
+                valid_strategies.join(", ")
+            ));
+        }
+
+        // conversation.budget_fraction: 0.1–1.0
+        if !(0.1..=1.0).contains(&self.conversation.budget_fraction) {
+            errors.push(format!(
+                "conversation.budget_fraction = {} is out of range (must be 0.1–1.0)",
+                self.conversation.budget_fraction
+            ));
+        }
+
+        // conversation.compaction_threshold: 0.1–1.0
+        if !(0.1..=1.0).contains(&self.conversation.compaction_threshold) {
+            errors.push(format!(
+                "conversation.compaction_threshold = {} is out of range (must be 0.1–1.0)",
+                self.conversation.compaction_threshold
+            ));
         }
 
         // general.default_provider should match a providers key (warning only)
@@ -211,6 +241,101 @@ pub struct ProviderConfig {
 
 fn default_provider_type() -> String {
     "openai".to_string()
+}
+
+/// Conversation and context window management settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConversationConfig {
+    /// Compaction strategy: "none", "truncation", "summarization".
+    #[serde(default = "default_compaction_strategy")]
+    pub compaction_strategy: String,
+    /// Context usage fraction (0.0–1.0) that triggers compaction warning.
+    #[serde(default = "default_compaction_threshold")]
+    pub compaction_threshold: f64,
+    /// Number of recent messages to always keep during compaction.
+    #[serde(default = "default_recent_messages")]
+    pub recent_messages: usize,
+    /// Maximum checkpoints to retain per conversation.
+    #[serde(default = "default_max_checkpoints")]
+    pub max_checkpoints: usize,
+    /// Budget fraction of context window to use (0.0–1.0).
+    #[serde(default = "default_budget_fraction")]
+    pub budget_fraction: f64,
+}
+
+impl Default for ConversationConfig {
+    fn default() -> Self {
+        Self {
+            compaction_strategy: default_compaction_strategy(),
+            compaction_threshold: default_compaction_threshold(),
+            recent_messages: default_recent_messages(),
+            max_checkpoints: default_max_checkpoints(),
+            budget_fraction: default_budget_fraction(),
+        }
+    }
+}
+
+fn default_compaction_strategy() -> String {
+    "auto".to_string()
+}
+
+fn default_compaction_threshold() -> f64 {
+    0.75
+}
+
+fn default_recent_messages() -> usize {
+    20
+}
+
+fn default_max_checkpoints() -> usize {
+    5
+}
+
+fn default_budget_fraction() -> f64 {
+    0.80
+}
+
+/// Usage tracking and cost display settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UsageConfig {
+    /// Show token usage in the status bar after each response.
+    #[serde(default = "default_true")]
+    pub show_token_usage: bool,
+    /// Show cost in the status bar (requires pricing data for the model).
+    #[serde(default = "default_true")]
+    pub show_cost: bool,
+    /// Show context window usage percentage in the status bar.
+    #[serde(default = "default_true")]
+    pub show_context_usage: bool,
+    /// Cost threshold (USD) for per-turn warning.
+    #[serde(default)]
+    pub cost_warning_threshold: Option<f64>,
+    /// Custom per-million-token pricing overrides, keyed by model ID.
+    #[serde(default)]
+    pub custom_pricing: HashMap<String, CustomPricing>,
+}
+
+impl Default for UsageConfig {
+    fn default() -> Self {
+        Self {
+            show_token_usage: true,
+            show_cost: true,
+            show_context_usage: true,
+            cost_warning_threshold: None,
+            custom_pricing: HashMap::new(),
+        }
+    }
+}
+
+/// Custom per-million-token pricing for a model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CustomPricing {
+    pub input_per_million: f64,
+    pub output_per_million: f64,
+    #[serde(default)]
+    pub cache_read_per_million: f64,
+    #[serde(default)]
+    pub cache_write_per_million: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -486,5 +611,139 @@ url = "http://localhost:8080/sse"
 
         let errs = config.validate().unwrap_err();
         assert_eq!(errs.len(), 3);
+    }
+
+    #[test]
+    fn conversation_config_defaults() {
+        let config = ConversationConfig::default();
+        assert_eq!(config.compaction_strategy, "auto");
+        assert!((config.compaction_threshold - 0.75).abs() < f64::EPSILON);
+        assert_eq!(config.recent_messages, 20);
+        assert_eq!(config.max_checkpoints, 5);
+        assert!((config.budget_fraction - 0.80).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn usage_config_defaults() {
+        let config = UsageConfig::default();
+        assert!(config.show_token_usage);
+        assert!(config.show_cost);
+        assert!(config.show_context_usage);
+        assert!(config.cost_warning_threshold.is_none());
+        assert!(config.custom_pricing.is_empty());
+    }
+
+    #[test]
+    fn conversation_config_from_toml() {
+        let toml_str = r#"
+[conversation]
+compaction_strategy = "truncation"
+recent_messages = 30
+max_checkpoints = 10
+budget_fraction = 0.90
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.conversation.compaction_strategy, "truncation");
+        assert_eq!(config.conversation.recent_messages, 30);
+        assert_eq!(config.conversation.max_checkpoints, 10);
+        assert!((config.conversation.budget_fraction - 0.90).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn usage_config_from_toml() {
+        let toml_str = r#"
+[usage]
+show_cost = false
+cost_warning_threshold = 0.50
+
+[usage.custom_pricing.my-model]
+input_per_million = 1.0
+output_per_million = 2.0
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.usage.show_cost);
+        assert_eq!(config.usage.cost_warning_threshold, Some(0.50));
+        assert!(config.usage.custom_pricing.contains_key("my-model"));
+    }
+
+    #[test]
+    fn invalid_compaction_strategy_is_error() {
+        let mut config = AppConfig::default();
+        config.conversation.compaction_strategy = "invalid".to_string();
+        let errs = config.validate().unwrap_err();
+        assert!(errs[0].contains("compaction_strategy"));
+    }
+
+    #[test]
+    fn budget_fraction_out_of_range() {
+        let mut config = AppConfig::default();
+        config.conversation.budget_fraction = 0.05;
+        assert!(config.validate().is_err());
+        config.conversation.budget_fraction = 1.5;
+        assert!(config.validate().is_err());
+        config.conversation.budget_fraction = 0.5;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn compaction_threshold_out_of_range() {
+        let mut config = AppConfig::default();
+        config.conversation.compaction_threshold = 0.05;
+        assert!(config.validate().is_err());
+        config.conversation.compaction_threshold = 1.5;
+        assert!(config.validate().is_err());
+        config.conversation.compaction_threshold = 0.75;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn valid_compaction_strategies_accepted() {
+        for strategy in &["auto", "none", "truncation", "summarization"] {
+            let mut config = AppConfig::default();
+            config.conversation.compaction_strategy = strategy.to_string();
+            assert!(config.validate().is_ok(), "strategy '{strategy}' should be valid");
+        }
+    }
+
+    #[test]
+    fn custom_pricing_roundtrip() {
+        let toml_str = r#"
+[usage.custom_pricing.my-model]
+input_per_million = 5.0
+output_per_million = 15.0
+cache_read_per_million = 0.5
+cache_write_per_million = 2.0
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let pricing = &config.usage.custom_pricing["my-model"];
+        assert!((pricing.input_per_million - 5.0).abs() < f64::EPSILON);
+        assert!((pricing.output_per_million - 15.0).abs() < f64::EPSILON);
+        assert!((pricing.cache_read_per_million - 0.5).abs() < f64::EPSILON);
+        assert!((pricing.cache_write_per_million - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn config_with_all_new_sections() {
+        let toml_str = r#"
+[conversation]
+compaction_strategy = "summarization"
+recent_messages = 15
+max_checkpoints = 3
+budget_fraction = 0.70
+compaction_threshold = 0.60
+
+[usage]
+show_token_usage = false
+show_cost = true
+show_context_usage = false
+cost_warning_threshold = 1.0
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.conversation.compaction_strategy, "summarization");
+        assert_eq!(config.conversation.recent_messages, 15);
+        assert!(!config.usage.show_token_usage);
+        assert!(!config.usage.show_context_usage);
+        assert_eq!(config.usage.cost_warning_threshold, Some(1.0));
+        assert!(config.validate().is_ok());
     }
 }

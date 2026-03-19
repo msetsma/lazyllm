@@ -9,6 +9,10 @@ use crate::context::Context;
 use crate::conversation::ConversationManager;
 use crate::event::types::{Action, FocusTarget, Mode};
 use crate::llm::ProviderRegistry;
+use crate::llm::capabilities;
+use crate::llm::compaction;
+use crate::llm::context;
+use crate::llm::pricing;
 use crate::llm::types::{ChatRequest, Message, StreamChunk, ToolCall, TokenUsage};
 use crate::mcp::McpManager;
 use crate::store::Store;
@@ -47,6 +51,9 @@ pub struct App {
     // Token usage
     pub(crate) last_usage: Option<TokenUsage>,
     pub(crate) session_usage: TokenUsage,
+
+    // Context management
+    pub(crate) compaction_summary: Option<String>,
 
     // Persistence
     pub(crate) conversations: ConversationManager,
@@ -131,6 +138,7 @@ impl App {
             active_context,
             last_usage: None,
             session_usage: TokenUsage::default(),
+            compaction_summary: None,
             conversations: ConversationManager::new(),
             chat_list: ChatList::new(),
             chat_view,
@@ -202,6 +210,9 @@ impl App {
                 ms.context_name = conv.context_name.clone();
                 self.model_selector = ms;
 
+                // Reset compaction state for the new conversation
+                self.compaction_summary = None;
+
                 let mut view = ChatView::from_messages(&conv.messages);
                 view.set_show_timestamps(self.config.ui.show_timestamps);
                 self.chat_view = view;
@@ -217,6 +228,10 @@ impl App {
         let provider = self.config.general.default_provider.clone();
         let model = self.config.general.default_model.clone();
         let (_id, title) = self.conversations.create_new_conversation(provider, model);
+
+        // Reset context management state
+        self.compaction_summary = None;
+        self.model_selector.context_usage_pct = None;
 
         // Apply active context to the new conversation
         if let Some(ref ctx_name) = self.active_context {
@@ -535,11 +550,544 @@ impl App {
                     self.status_bar.set_status("Context cleared".to_string());
                 }
             }
+            Command::Export => {
+                self.export_active_conversation();
+            }
+            Command::Import(path) => {
+                self.import_conversation(&path);
+            }
+            Command::Usage => {
+                self.show_usage();
+            }
+            Command::Spend => {
+                self.show_spend();
+            }
+            Command::Compact => {
+                self.compact_conversation();
+            }
+            Command::Checkpoints => {
+                self.show_checkpoints();
+            }
+            Command::Restore(id) => {
+                self.restore_checkpoint(id);
+            }
+            Command::Set(key, value) => {
+                self.set_config(&key, &value);
+            }
             Command::Unknown(cmd) => {
                 self.status_bar
                     .set_status(format!("Unknown command: {cmd}"));
             }
         }
+    }
+
+    /// Export the active conversation to a JSON file in the data directory.
+    fn export_active_conversation(&mut self) {
+        let conv = match &self.conversations.active_conversation {
+            Some(c) => c,
+            None => {
+                self.status_bar.set_status("No active conversation to export".to_string());
+                return;
+            }
+        };
+
+        let store = match &self.conversations.store {
+            Some(s) => s,
+            None => {
+                self.status_bar.set_status("No store available".to_string());
+                return;
+            }
+        };
+
+        match store.export_conversation(conv.id) {
+            Ok(json) => {
+                let export_dir = self.config.general.data_dir.join("exports");
+                if let Err(e) = std::fs::create_dir_all(&export_dir) {
+                    self.status_bar.set_status(format!("Failed to create export dir: {e}"));
+                    return;
+                }
+                let path = export_dir.join(format!("{}.json", conv.id));
+                match std::fs::write(&path, json) {
+                    Ok(()) => {
+                        self.status_bar.set_status(format!("Exported to {}", path.display()));
+                    }
+                    Err(e) => {
+                        self.status_bar.set_status(format!("Export failed: {e}"));
+                    }
+                }
+            }
+            Err(e) => {
+                self.status_bar.set_status(format!("Export failed: {e}"));
+            }
+        }
+    }
+
+    /// Import a conversation from a JSON file.
+    fn import_conversation(&mut self, path: &str) {
+        let store = match &self.conversations.store {
+            Some(s) => s,
+            None => {
+                self.status_bar.set_status("No store available".to_string());
+                return;
+            }
+        };
+
+        let json = match std::fs::read_to_string(path) {
+            Ok(j) => j,
+            Err(e) => {
+                self.status_bar.set_status(format!("Failed to read file: {e}"));
+                return;
+            }
+        };
+
+        match store.import_conversation(&json) {
+            Ok(id) => {
+                self.conversations.conversation_ids.insert(0, id);
+                // Reload the conversation list to get the title
+                if let Some(list) = self.conversations.load_conversation_list() {
+                    self.chat_list = ChatList::from_items(list.titles);
+                }
+                self.status_bar.set_status(format!("Imported conversation {id}"));
+            }
+            Err(e) => {
+                self.status_bar.set_status(format!("Import failed: {e}"));
+            }
+        }
+    }
+
+    /// Show token usage stats for the current conversation.
+    fn show_usage(&mut self) {
+        let conv = match &self.conversations.active_conversation {
+            Some(c) => c,
+            None => {
+                self.status_bar
+                    .set_status("No active conversation".to_string());
+                return;
+            }
+        };
+
+        let total_tokens = conv.total_input_tokens + conv.total_output_tokens;
+        let mut info = format!(
+            "Usage: {}in + {}out = {} tokens | {} turns",
+            conv.total_input_tokens, conv.total_output_tokens, total_tokens, conv.turn_count
+        );
+        if conv.total_cache_tokens > 0 {
+            info.push_str(&format!(" | cache: {}", conv.total_cache_tokens));
+        }
+        if conv.total_cost > 0.0 {
+            info.push_str(&format!(" | cost: {}", pricing::format_cost(conv.total_cost)));
+        }
+        // Add session usage
+        if self.session_usage.total() > 0 {
+            info.push_str(&format!(
+                " | session: {} ({})",
+                self.session_usage.total(),
+                pricing::format_cost(self.session_usage.cost)
+            ));
+        }
+        self.chat_view.add_message(ChatMessage {
+            role: MessageRole::System,
+            content: info,
+            timestamp: Some(chrono::Local::now()),
+        });
+    }
+
+    /// Show cost report across all conversations.
+    fn show_spend(&mut self) {
+        let store = match &self.conversations.store {
+            Some(s) => s,
+            None => {
+                self.status_bar
+                    .set_status("No store available".to_string());
+                return;
+            }
+        };
+
+        let summaries = match store.list() {
+            Ok(s) => s,
+            Err(e) => {
+                self.status_bar
+                    .set_status(format!("Failed to load conversations: {e}"));
+                return;
+            }
+        };
+
+        let mut total_cost = 0.0;
+        let mut total_input = 0u64;
+        let mut total_output = 0u64;
+        let mut total_turns = 0u32;
+        let mut lines = vec!["Cost Report:".to_string()];
+
+        for s in &summaries {
+            total_cost += s.total_cost;
+            total_input += s.total_input_tokens as u64;
+            total_output += s.total_output_tokens as u64;
+            total_turns += s.turn_count;
+            if s.total_cost > 0.0 {
+                lines.push(format!(
+                    "  {} | {} | {} turns | {}",
+                    truncate_title(&s.title, 30),
+                    s.model,
+                    s.turn_count,
+                    pricing::format_cost(s.total_cost),
+                ));
+            }
+        }
+
+        lines.push(format!(
+            "Total: {}in + {}out = {} tokens | {} turns | {}",
+            total_input,
+            total_output,
+            total_input + total_output,
+            total_turns,
+            pricing::format_cost(total_cost)
+        ));
+
+        // Add session totals
+        if self.session_usage.total() > 0 {
+            lines.push(format!(
+                "Session: {} tokens | {}",
+                self.session_usage.total(),
+                pricing::format_cost(self.session_usage.cost)
+            ));
+        }
+
+        self.chat_view.add_message(ChatMessage {
+            role: MessageRole::System,
+            content: lines.join("\n"),
+            timestamp: Some(chrono::Local::now()),
+        });
+    }
+
+    /// Set a runtime configuration value.
+    fn set_config(&mut self, key: &str, value: &str) {
+        match key {
+            "temperature" => {
+                match value.parse::<f32>() {
+                    Ok(t) if (0.0..=2.0).contains(&t) => {
+                        self.config.general.temperature = Some(t);
+                        self.status_bar
+                            .set_status(format!("temperature = {t}"));
+                    }
+                    _ => {
+                        self.status_bar
+                            .set_status("temperature must be 0.0–2.0".to_string());
+                    }
+                }
+            }
+            "max_tokens" => {
+                match value.parse::<u32>() {
+                    Ok(n) if n > 0 => {
+                        self.config.general.max_tokens = Some(n);
+                        self.status_bar
+                            .set_status(format!("max_tokens = {n}"));
+                    }
+                    _ => {
+                        self.status_bar
+                            .set_status("max_tokens must be a positive integer".to_string());
+                    }
+                }
+            }
+            "compaction" | "compaction_strategy" => {
+                let valid = ["auto", "none", "truncation", "summarization"];
+                if valid.contains(&value) {
+                    self.config.conversation.compaction_strategy = value.to_string();
+                    self.status_bar
+                        .set_status(format!("compaction_strategy = {value}"));
+                } else {
+                    self.status_bar.set_status(format!(
+                        "Invalid strategy. Use: {}",
+                        valid.join(", ")
+                    ));
+                }
+            }
+            "recent_messages" => {
+                match value.parse::<usize>() {
+                    Ok(n) if n > 0 => {
+                        self.config.conversation.recent_messages = n;
+                        self.status_bar
+                            .set_status(format!("recent_messages = {n}"));
+                    }
+                    _ => {
+                        self.status_bar
+                            .set_status("recent_messages must be a positive integer".to_string());
+                    }
+                }
+            }
+            "show_cost" => {
+                match value {
+                    "true" | "on" | "1" => {
+                        self.config.usage.show_cost = true;
+                        self.status_bar.set_status("show_cost = true".to_string());
+                    }
+                    "false" | "off" | "0" => {
+                        self.config.usage.show_cost = false;
+                        self.status_bar.set_status("show_cost = false".to_string());
+                    }
+                    _ => {
+                        self.status_bar
+                            .set_status("show_cost must be true/false".to_string());
+                    }
+                }
+            }
+            "show_tokens" | "show_token_usage" => {
+                match value {
+                    "true" | "on" | "1" => {
+                        self.config.usage.show_token_usage = true;
+                        self.status_bar.set_status("show_token_usage = true".to_string());
+                    }
+                    "false" | "off" | "0" => {
+                        self.config.usage.show_token_usage = false;
+                        self.status_bar.set_status("show_token_usage = false".to_string());
+                    }
+                    _ => {
+                        self.status_bar
+                            .set_status("show_token_usage must be true/false".to_string());
+                    }
+                }
+            }
+            "system_prompt" => {
+                if value == "none" || value == "clear" {
+                    self.config.general.system_prompt = None;
+                    self.status_bar
+                        .set_status("system_prompt cleared".to_string());
+                } else {
+                    self.config.general.system_prompt = Some(value.to_string());
+                    self.status_bar
+                        .set_status("system_prompt set".to_string());
+                }
+            }
+            _ => {
+                self.status_bar
+                    .set_status(format!("Unknown setting: {key}"));
+            }
+        }
+    }
+
+    /// Compact the active conversation by truncating/summarizing older messages.
+    fn compact_conversation(&mut self) {
+        let conv = match &self.conversations.active_conversation {
+            Some(c) => c,
+            None => {
+                self.status_bar
+                    .set_status("No active conversation".to_string());
+                return;
+            }
+        };
+
+        let recent_count = self.config.conversation.recent_messages;
+        if conv.messages.len() <= recent_count {
+            self.status_bar
+                .set_status("Conversation too short to compact".to_string());
+            return;
+        }
+
+        // Save a checkpoint before compacting
+        let max_checkpoints = self.config.conversation.max_checkpoints;
+        if let Some(store) = &self.conversations.store {
+            if let Err(e) = store.save_checkpoint(conv.id, &conv.messages, Some("pre-compaction")) {
+                tracing::warn!("Failed to save checkpoint: {e}");
+            }
+            let _ = store.prune_checkpoints(conv.id, max_checkpoints);
+        }
+
+        let strategy_str = &self.config.conversation.compaction_strategy;
+        let strategy = if strategy_str == "auto" {
+            compaction::auto_select_strategy(&self.config.general.default_provider)
+        } else {
+            compaction::CompactionStrategy::from_str(strategy_str)
+        };
+
+        let result = match strategy {
+            compaction::CompactionStrategy::None => {
+                self.status_bar
+                    .set_status("Compaction disabled".to_string());
+                return;
+            }
+            compaction::CompactionStrategy::Truncation => {
+                compaction::truncate_messages(&conv.messages, recent_count)
+            }
+            compaction::CompactionStrategy::ClientSummarization => {
+                // For now, fall back to truncation. Full summarization requires
+                // an async LLM call which would need to be handled via streaming.
+                compaction::truncate_messages(&conv.messages, recent_count)
+            }
+        };
+
+        // Apply compaction
+        self.compaction_summary = result.summary.clone();
+        if let Some(conv) = &mut self.conversations.active_conversation {
+            conv.messages = result.messages;
+            conv.updated_at = chrono::Utc::now();
+        }
+        self.save_active_conversation();
+
+        // Refresh chat view
+        self.chat_view.clear();
+        if let Some(conv) = &self.conversations.active_conversation {
+            for msg in &conv.messages {
+                let role = match msg.role {
+                    crate::llm::types::Role::User => MessageRole::User,
+                    crate::llm::types::Role::Assistant => MessageRole::Assistant,
+                    _ => MessageRole::System,
+                };
+                self.chat_view.add_message(ChatMessage {
+                    role,
+                    content: msg.content.clone(),
+                    timestamp: None,
+                });
+            }
+        }
+
+        self.status_bar.set_status(format!(
+            "Compacted: removed {} messages (strategy: {})",
+            result.removed_count,
+            strategy.as_str()
+        ));
+    }
+
+    /// Show checkpoints for the active conversation.
+    fn show_checkpoints(&mut self) {
+        let conv = match &self.conversations.active_conversation {
+            Some(c) => c,
+            None => {
+                self.status_bar
+                    .set_status("No active conversation".to_string());
+                return;
+            }
+        };
+
+        let store = match &self.conversations.store {
+            Some(s) => s,
+            None => {
+                self.status_bar
+                    .set_status("No store available".to_string());
+                return;
+            }
+        };
+
+        match store.load_checkpoints(conv.id) {
+            Ok(checkpoints) => {
+                if checkpoints.is_empty() {
+                    self.chat_view.add_message(ChatMessage {
+                        role: MessageRole::System,
+                        content: "No checkpoints saved for this conversation.".to_string(),
+                        timestamp: Some(chrono::Local::now()),
+                    });
+                } else {
+                    let mut lines = vec![format!("Checkpoints ({}):", checkpoints.len())];
+                    for cp in &checkpoints {
+                        let reason = cp.reason.as_deref().unwrap_or("manual");
+                        lines.push(format!(
+                            "  #{} | {} | {}",
+                            cp.id,
+                            cp.created_at.format("%Y-%m-%d %H:%M"),
+                            reason
+                        ));
+                    }
+                    lines.push("Use :restore <id> to restore a checkpoint.".to_string());
+                    self.chat_view.add_message(ChatMessage {
+                        role: MessageRole::System,
+                        content: lines.join("\n"),
+                        timestamp: Some(chrono::Local::now()),
+                    });
+                }
+            }
+            Err(e) => {
+                self.status_bar
+                    .set_status(format!("Failed to load checkpoints: {e}"));
+            }
+        }
+    }
+
+    /// Restore a checkpoint by ID (or latest if None).
+    fn restore_checkpoint(&mut self, checkpoint_id: Option<i64>) {
+        let conv = match &self.conversations.active_conversation {
+            Some(c) => c,
+            None => {
+                self.status_bar
+                    .set_status("No active conversation".to_string());
+                return;
+            }
+        };
+
+        let store = match &self.conversations.store {
+            Some(s) => s,
+            None => {
+                self.status_bar
+                    .set_status("No store available".to_string());
+                return;
+            }
+        };
+
+        let checkpoints = match store.load_checkpoints(conv.id) {
+            Ok(cps) => cps,
+            Err(e) => {
+                self.status_bar
+                    .set_status(format!("Failed to load checkpoints: {e}"));
+                return;
+            }
+        };
+
+        if checkpoints.is_empty() {
+            self.status_bar
+                .set_status("No checkpoints available".to_string());
+            return;
+        }
+
+        let checkpoint = match checkpoint_id {
+            Some(id) => checkpoints.iter().find(|c| c.id == id),
+            None => checkpoints.last(),
+        };
+
+        let checkpoint = match checkpoint {
+            Some(cp) => cp,
+            None => {
+                self.status_bar
+                    .set_status("Checkpoint not found".to_string());
+                return;
+            }
+        };
+
+        // Parse the snapshot
+        let messages: Vec<Message> = match serde_json::from_str(&checkpoint.snapshot_json) {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                self.status_bar
+                    .set_status(format!("Failed to parse checkpoint: {e}"));
+                return;
+            }
+        };
+
+        // Restore messages
+        if let Some(conv) = &mut self.conversations.active_conversation {
+            conv.messages = messages;
+            conv.updated_at = chrono::Utc::now();
+        }
+        self.compaction_summary = None;
+        self.save_active_conversation();
+
+        // Refresh chat view
+        self.chat_view.clear();
+        if let Some(conv) = &self.conversations.active_conversation {
+            for msg in &conv.messages {
+                let role = match msg.role {
+                    crate::llm::types::Role::User => MessageRole::User,
+                    crate::llm::types::Role::Assistant => MessageRole::Assistant,
+                    _ => MessageRole::System,
+                };
+                self.chat_view.add_message(ChatMessage {
+                    role,
+                    content: msg.content.clone(),
+                    timestamp: None,
+                });
+            }
+        }
+
+        self.status_bar.set_status(format!(
+            "Restored checkpoint #{}",
+            checkpoint.id
+        ));
     }
 
     /// Handle actions when the model popup is visible. Returns true if consumed.
@@ -573,6 +1121,7 @@ impl App {
         self.config.general.default_model = model.clone();
         let mut ms = ModelSelector::new(provider.clone(), model.clone());
         ms.context_name = self.active_context.clone();
+        ms.context_usage_pct = self.model_selector.context_usage_pct;
         self.model_selector = ms;
 
         // Update the active conversation's model/provider
@@ -623,19 +1172,18 @@ impl App {
             .and_then(|p| p.default_model.clone())
             .unwrap_or_else(|| self.config.general.default_model.clone());
 
-        // Prepend global system prompt if configured
-        let mut messages = Vec::new();
+        // Build system and context messages
+        let mut system_messages = Vec::new();
         if let Some(ref prompt) = self.config.general.system_prompt {
-            messages.push(Message::system(prompt.clone()));
+            system_messages.push(Message::system(prompt.clone()));
         }
 
-        // Prepend context messages if a context is active
-        if let Some(ref ctx_name) = self.active_context {
-            if let Some(ctx) = self.contexts.get(ctx_name) {
-                messages.extend(ctx.build_messages());
-            }
-        }
-        messages.extend(self.messages().iter().cloned());
+        let context_messages: Vec<Message> = self
+            .active_context
+            .as_ref()
+            .and_then(|name| self.contexts.get(name))
+            .map(|ctx| ctx.build_messages())
+            .unwrap_or_default();
 
         // Attach MCP tools to the request if available
         let tool_defs = self
@@ -645,7 +1193,38 @@ impl App {
             .map(|m| m.tool_definitions())
             .unwrap_or_default();
 
-        let mut request = ChatRequest::new(model.clone(), messages).with_tools(tool_defs);
+        // Budget-aware context assembly using config settings
+        let caps = capabilities::get_capabilities(&model);
+        let ctx_config = context::ContextConfig {
+            recent_message_count: self.config.conversation.recent_messages,
+            budget_fraction: self.config.conversation.budget_fraction,
+            ..context::ContextConfig::default()
+        };
+        let assembled = context::assemble_context(
+            &system_messages,
+            &context_messages,
+            self.messages(),
+            self.compaction_summary.as_deref(),
+            tool_defs.len(),
+            &caps,
+            &ctx_config,
+        );
+
+        // Update context estimate on the conversation
+        if let Some(conv) = &mut self.conversations.active_conversation {
+            conv.context_estimate = assembled.estimated_tokens;
+        }
+
+        // Update context usage display
+        if self.config.usage.show_context_usage {
+            let pct = (assembled.usage_fraction * 100.0) as u32;
+            self.model_selector.context_usage_pct = Some(pct);
+            if assembled.compaction_recommended {
+                tracing::info!("Context usage: {pct}% — compaction recommended");
+            }
+        }
+
+        let mut request = ChatRequest::new(model.clone(), assembled.messages).with_tools(tool_defs);
         if let Some(temp) = self.config.general.temperature {
             request = request.with_temperature(temp);
         }
@@ -656,7 +1235,12 @@ impl App {
         let (tx, rx) = mpsc::unbounded_channel();
         self.stream_rx = Some(rx);
         self.streaming = true;
-        self.last_usage = None;
+        // Seed usage with model/provider info for cost calculation later
+        self.last_usage = Some(TokenUsage {
+            model: Some(model.clone()),
+            provider: Some(provider_name.clone()),
+            ..Default::default()
+        });
 
         // Add empty assistant message that we'll append chunks to
         self.chat_view.add_message(ChatMessage {
@@ -785,8 +1369,7 @@ impl App {
                 Ok(StreamChunk::Usage(usage)) => {
                     // Accumulate partial usage (Anthropic sends input + output separately)
                     let current = self.last_usage.get_or_insert(TokenUsage::default());
-                    current.input_tokens += usage.input_tokens;
-                    current.output_tokens += usage.output_tokens;
+                    current.accumulate(&usage);
                 }
                 Ok(StreamChunk::ToolCallStart { name, .. }) => {
                     self.chat_view
@@ -837,16 +1420,89 @@ impl App {
                 .add_message(Message::assistant(&last.content));
         }
 
+        // Calculate cost from pricing registry (or custom overrides) before consuming usage
+        if let Some(usage) = self.last_usage.as_mut() {
+            let model = usage
+                .model
+                .as_deref()
+                .unwrap_or(&self.config.general.default_model);
+
+            // Check custom pricing first, then built-in
+            let model_pricing = self
+                .config
+                .usage
+                .custom_pricing
+                .get(model)
+                .map(|cp| {
+                    pricing::ModelPricing::new(cp.input_per_million, cp.output_per_million)
+                        .with_cache(cp.cache_read_per_million, cp.cache_write_per_million)
+                })
+                .or_else(|| pricing::get_pricing(model));
+
+            if let Some(mp) = model_pricing {
+                usage.cost = mp.calculate_cost(
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cache_read_tokens,
+                    usage.cache_creation_tokens,
+                );
+            }
+
+            // Cost warning
+            if let Some(threshold) = self.config.usage.cost_warning_threshold {
+                if usage.cost > threshold {
+                    tracing::warn!(
+                        "Turn cost ${:.4} exceeds warning threshold ${:.4}",
+                        usage.cost,
+                        threshold
+                    );
+                }
+            }
+        }
+
+        // Update conversation-level usage totals
+        if let Some(usage) = &self.last_usage {
+            if let Some(conv) = &mut self.conversations.active_conversation {
+                conv.total_input_tokens += usage.input_tokens;
+                conv.total_output_tokens += usage.output_tokens;
+                conv.total_cache_tokens += usage.cache_read_tokens + usage.cache_creation_tokens;
+                conv.total_cost += usage.cost;
+                conv.turn_count += 1;
+            }
+        }
+
         self.save_active_conversation();
 
         // Build status with token usage if available
         let status = if let Some(usage) = self.last_usage.take() {
-            self.session_usage.input_tokens += usage.input_tokens;
-            self.session_usage.output_tokens += usage.output_tokens;
-            format!(
-                "ready | {} (session: {})",
-                usage, self.session_usage
-            )
+            self.session_usage.accumulate(&usage);
+            let mut parts = vec!["ready".to_string()];
+
+            if self.config.usage.show_token_usage {
+                parts.push(format!(
+                    "{}in + {}out",
+                    usage.input_tokens, usage.output_tokens
+                ));
+            }
+
+            if self.config.usage.show_cost && usage.cost > 0.0 {
+                parts.push(pricing::format_cost(usage.cost));
+            }
+
+            if self.config.usage.show_token_usage && self.session_usage.total() > 0 {
+                let session_str = if self.config.usage.show_cost && self.session_usage.cost > 0.0 {
+                    format!(
+                        "session: {} ({})",
+                        self.session_usage.total(),
+                        pricing::format_cost(self.session_usage.cost)
+                    )
+                } else {
+                    format!("session: {}", self.session_usage.total())
+                };
+                parts.push(session_str);
+            }
+
+            parts.join(" | ")
         } else {
             "ready".to_string()
         };
@@ -898,6 +1554,14 @@ fn copy_to_clipboard(text: &str) -> Result<(), String> {
         .flush()
         .map_err(|e| format!("clipboard unavailable: {e}"))?;
     Ok(())
+}
+
+fn truncate_title(title: &str, max_len: usize) -> String {
+    if title.len() <= max_len {
+        title.to_string()
+    } else {
+        format!("{}...", &title[..max_len.saturating_sub(3)])
+    }
 }
 
 #[cfg(test)]
@@ -1514,5 +2178,159 @@ mod tests {
             Some("ready")
         );
         assert_eq!(app.session_usage.total(), 0);
+    }
+
+    // ── Context & compaction tests ──
+
+    #[tokio::test]
+    async fn new_conversation_clears_compaction_state() {
+        let (mut app, _tmp) = test_app_with_store();
+        app.compaction_summary = Some("old summary".to_string());
+        app.model_selector.context_usage_pct = Some(85);
+
+        app.create_new_conversation();
+
+        assert!(app.compaction_summary.is_none());
+        assert!(app.model_selector.context_usage_pct.is_none());
+    }
+
+    #[tokio::test]
+    async fn switch_conversation_clears_compaction() {
+        let (mut app, _tmp) = test_app_with_store();
+
+        // Create two conversations
+        app.update(Action::InsertChar('A')).await;
+        app.update(Action::SendMessage).await;
+        app.update(Action::NewChat).await;
+        app.update(Action::InsertChar('B')).await;
+        app.update(Action::SendMessage).await;
+
+        app.compaction_summary = Some("summary".to_string());
+        app.switch_to_conversation(1);
+        assert!(app.compaction_summary.is_none());
+    }
+
+    #[tokio::test]
+    async fn compact_too_short_shows_message() {
+        let (mut app, _tmp) = test_app_with_store();
+        app.create_new_conversation();
+
+        // Add fewer messages than recent_messages threshold
+        for i in 0..5 {
+            app.conversations.add_message(Message::user(format!("msg {i}")));
+        }
+
+        app.compact_conversation();
+        assert!(app
+            .status_bar
+            .status_message
+            .as_ref()
+            .unwrap()
+            .contains("too short"));
+    }
+
+    #[tokio::test]
+    async fn compact_reduces_messages() {
+        let (mut app, _tmp) = test_app_with_store();
+        app.create_new_conversation();
+        app.config.conversation.recent_messages = 5;
+
+        // Add 30 messages
+        for i in 0..30 {
+            app.conversations.add_message(Message::user(format!("msg {i}")));
+            app.chat_view.add_message(ChatMessage {
+                role: MessageRole::User,
+                content: format!("msg {i}"),
+                timestamp: None,
+            });
+        }
+
+        app.compact_conversation();
+        assert!(app.compaction_summary.is_some());
+        let conv = app.conversations.active_conversation.as_ref().unwrap();
+        assert_eq!(conv.messages.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn set_command_temperature() {
+        let mut app = test_app();
+        app.set_config("temperature", "0.5");
+        assert_eq!(app.config.general.temperature, Some(0.5));
+
+        app.set_config("temperature", "3.0");
+        // Should not change — out of range
+        assert_eq!(app.config.general.temperature, Some(0.5));
+    }
+
+    #[tokio::test]
+    async fn set_command_compaction() {
+        let mut app = test_app();
+        app.set_config("compaction", "truncation");
+        assert_eq!(app.config.conversation.compaction_strategy, "truncation");
+
+        app.set_config("compaction", "invalid");
+        // Should not change
+        assert_eq!(app.config.conversation.compaction_strategy, "truncation");
+    }
+
+    #[tokio::test]
+    async fn set_command_show_cost() {
+        let mut app = test_app();
+        app.set_config("show_cost", "false");
+        assert!(!app.config.usage.show_cost);
+        app.set_config("show_cost", "true");
+        assert!(app.config.usage.show_cost);
+    }
+
+    #[tokio::test]
+    async fn usage_command_shows_info() {
+        let (mut app, _tmp) = test_app_with_store();
+        app.create_new_conversation();
+
+        // Set some usage on the conversation
+        if let Some(conv) = &mut app.conversations.active_conversation {
+            conv.total_input_tokens = 100;
+            conv.total_output_tokens = 200;
+            conv.turn_count = 3;
+            conv.total_cost = 0.005;
+        }
+
+        app.show_usage();
+        let last_msg = app.chat_view.messages.last().unwrap();
+        assert!(last_msg.content.contains("100in"));
+        assert!(last_msg.content.contains("200out"));
+        assert!(last_msg.content.contains("3 turns"));
+        assert!(last_msg.content.contains("$0.005"));
+    }
+
+    #[tokio::test]
+    async fn cost_display_respects_show_cost_flag() {
+        let mut app = test_app();
+        app.config.usage.show_cost = false;
+        app.config.usage.show_token_usage = true;
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(StreamChunk::Delta("Hi".to_string())).unwrap();
+        tx.send(StreamChunk::Usage(TokenUsage {
+            input_tokens: 10,
+            output_tokens: 20,
+            cost: 0.05,
+            ..Default::default()
+        })).unwrap();
+        tx.send(StreamChunk::Done).unwrap();
+
+        app.chat_view.add_message(ChatMessage {
+            role: MessageRole::Assistant,
+            content: String::new(),
+            timestamp: None,
+        });
+        app.stream_rx = Some(rx);
+        app.streaming = true;
+
+        app.drain_stream_chunks();
+
+        let status = app.status_bar.status_message.as_ref().unwrap();
+        assert!(status.contains("10in"));
+        assert!(!status.contains("$")); // cost should be hidden
     }
 }

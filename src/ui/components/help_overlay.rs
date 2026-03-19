@@ -69,6 +69,14 @@ impl HelpOverlay {
             binding(":clear", "Clear messages", theme),
             binding(":context <name>", "Set active context", theme),
             binding(":ctx none", "Clear context", theme),
+            binding(":export", "Export conversation", theme),
+            binding(":import <path>", "Import conversation", theme),
+            binding(":usage / :tokens", "Show token usage", theme),
+            binding(":spend / :cost", "Show cost report", theme),
+            binding(":compact", "Compact conversation", theme),
+            binding(":checkpoints", "List checkpoints", theme),
+            binding(":restore [id]", "Restore checkpoint", theme),
+            binding(":set <key> <val>", "Change setting", theme),
             binding(":help", "Toggle help", theme),
         ]
     }

@@ -1,7 +1,11 @@
 pub mod anthropic;
+pub mod capabilities;
+pub mod compaction;
+pub mod context;
 pub mod google;
 pub mod ollama;
 pub mod openai;
+pub mod pricing;
 pub mod streaming;
 pub mod types;
 

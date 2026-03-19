@@ -4,7 +4,8 @@ pub mod types;
 
 use uuid::Uuid;
 
-use types::{Conversation, ConversationSummary};
+use crate::llm::types::Message;
+use types::{Checkpoint, Conversation, ConversationSummary, MessageUsage};
 
 /// Errors from the conversation store.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,4 +37,32 @@ pub trait Store: Send + Sync {
     fn load(&self, id: Uuid) -> Result<Conversation, StoreError>;
     fn save(&self, conversation: &Conversation) -> Result<(), StoreError>;
     fn delete(&self, id: Uuid) -> Result<(), StoreError>;
+
+    /// Atomically append a message and update conversation usage totals.
+    fn append_message(
+        &self,
+        conversation_id: Uuid,
+        message: &Message,
+        usage: Option<&MessageUsage>,
+    ) -> Result<(), StoreError>;
+
+    /// Save a pre-compaction checkpoint of the message history.
+    fn save_checkpoint(
+        &self,
+        conversation_id: Uuid,
+        messages: &[Message],
+        reason: Option<&str>,
+    ) -> Result<(), StoreError>;
+
+    /// Load all checkpoints for a conversation, ordered by creation time.
+    fn load_checkpoints(&self, conversation_id: Uuid) -> Result<Vec<Checkpoint>, StoreError>;
+
+    /// Remove oldest checkpoints beyond the max limit.
+    fn prune_checkpoints(&self, conversation_id: Uuid, max: usize) -> Result<(), StoreError>;
+
+    /// Export a conversation as a JSON string.
+    fn export_conversation(&self, id: Uuid) -> Result<String, StoreError>;
+
+    /// Import a conversation from a JSON string, assigning a new ID.
+    fn import_conversation(&self, json: &str) -> Result<Uuid, StoreError>;
 }

@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 
+use chrono::Utc;
 use uuid::Uuid;
 
-use super::types::{Conversation, ConversationSummary};
+use crate::llm::types::Message;
+use super::types::{Checkpoint, Conversation, ConversationSummary, MessageUsage};
 use super::{Store, StoreError};
 
 /// File-based conversation store using JSON files.
@@ -87,6 +89,113 @@ impl Store for JsonStore {
                 .map_err(|e| StoreError::Io(e.to_string()))?;
         }
         Ok(())
+    }
+
+    fn append_message(
+        &self,
+        conversation_id: Uuid,
+        message: &Message,
+        usage: Option<&MessageUsage>,
+    ) -> Result<(), StoreError> {
+        let mut conversation = self.load(conversation_id)?;
+        conversation.messages.push(message.clone());
+        conversation.updated_at = Utc::now();
+        if let Some(u) = usage {
+            conversation.total_input_tokens += u.input_tokens.unwrap_or(0);
+            conversation.total_output_tokens += u.output_tokens.unwrap_or(0);
+            conversation.total_cache_tokens +=
+                u.cache_read_tokens.unwrap_or(0) + u.cache_creation_tokens.unwrap_or(0);
+            conversation.total_cost += u.cost.unwrap_or(0.0);
+        }
+        conversation.turn_count += 1;
+        self.save(&conversation)
+    }
+
+    fn save_checkpoint(
+        &self,
+        conversation_id: Uuid,
+        messages: &[Message],
+        reason: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let dir = self.conversations_dir.parent()
+            .unwrap_or(&self.conversations_dir)
+            .join("checkpoints");
+        std::fs::create_dir_all(&dir).map_err(|e| StoreError::Io(e.to_string()))?;
+
+        let path = dir.join(format!("{conversation_id}.json"));
+        let mut checkpoints: Vec<Checkpoint> = if path.exists() {
+            let contents = std::fs::read_to_string(&path)
+                .map_err(|e| StoreError::Io(e.to_string()))?;
+            serde_json::from_str(&contents).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        let snapshot = serde_json::to_string(messages)
+            .map_err(|e| StoreError::Serialize(e.to_string()))?;
+        let next_id = checkpoints.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+        checkpoints.push(Checkpoint {
+            id: next_id,
+            conversation_id,
+            snapshot_json: snapshot,
+            reason: reason.map(|s| s.to_string()),
+            created_at: Utc::now(),
+        });
+
+        let json = serde_json::to_string_pretty(&checkpoints)
+            .map_err(|e| StoreError::Serialize(e.to_string()))?;
+        std::fs::write(&path, json).map_err(|e| StoreError::Io(e.to_string()))?;
+        Ok(())
+    }
+
+    fn load_checkpoints(&self, conversation_id: Uuid) -> Result<Vec<Checkpoint>, StoreError> {
+        let path = self.conversations_dir.parent()
+            .unwrap_or(&self.conversations_dir)
+            .join("checkpoints")
+            .join(format!("{conversation_id}.json"));
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let contents = std::fs::read_to_string(&path)
+            .map_err(|e| StoreError::Io(e.to_string()))?;
+        serde_json::from_str(&contents)
+            .map_err(|e| StoreError::Deserialize(e.to_string()))
+    }
+
+    fn prune_checkpoints(&self, conversation_id: Uuid, max: usize) -> Result<(), StoreError> {
+        let path = self.conversations_dir.parent()
+            .unwrap_or(&self.conversations_dir)
+            .join("checkpoints")
+            .join(format!("{conversation_id}.json"));
+        if !path.exists() {
+            return Ok(());
+        }
+        let contents = std::fs::read_to_string(&path)
+            .map_err(|e| StoreError::Io(e.to_string()))?;
+        let mut checkpoints: Vec<Checkpoint> = serde_json::from_str(&contents)
+            .map_err(|e| StoreError::Deserialize(e.to_string()))?;
+        if checkpoints.len() > max {
+            checkpoints.drain(..checkpoints.len() - max);
+        }
+        let json = serde_json::to_string_pretty(&checkpoints)
+            .map_err(|e| StoreError::Serialize(e.to_string()))?;
+        std::fs::write(&path, json).map_err(|e| StoreError::Io(e.to_string()))?;
+        Ok(())
+    }
+
+    fn export_conversation(&self, id: Uuid) -> Result<String, StoreError> {
+        let conversation = self.load(id)?;
+        serde_json::to_string_pretty(&conversation)
+            .map_err(|e| StoreError::Serialize(e.to_string()))
+    }
+
+    fn import_conversation(&self, json: &str) -> Result<Uuid, StoreError> {
+        let mut conversation: Conversation = serde_json::from_str(json)
+            .map_err(|e| StoreError::Deserialize(e.to_string()))?;
+        conversation.id = Uuid::new_v4();
+        conversation.updated_at = Utc::now();
+        self.save(&conversation)?;
+        Ok(conversation.id)
     }
 }
 

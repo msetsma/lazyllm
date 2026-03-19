@@ -10,6 +10,22 @@ pub enum Command {
     Clear,
     /// Set or clear the active context. None = clear, Some(name) = activate.
     Context(Option<String>),
+    /// Export the active conversation to a JSON file.
+    Export,
+    /// Import a conversation from a JSON file path.
+    Import(String),
+    /// Show usage stats for the current conversation.
+    Usage,
+    /// Show cost report across conversations.
+    Spend,
+    /// Manually compact the current conversation.
+    Compact,
+    /// List checkpoints for the current conversation.
+    Checkpoints,
+    /// Restore a checkpoint by index.
+    Restore(Option<i64>),
+    /// Set a runtime configuration value.
+    Set(String, String),
     Unknown(String),
 }
 
@@ -39,6 +55,32 @@ pub fn parse_command(input: &str) -> Command {
             Some(a) if a == "none" || a == "clear" => Command::Context(None),
             Some(a) if !a.is_empty() => Command::Context(Some(a.to_string())),
             _ => Command::Context(None),
+        },
+        "export" => Command::Export,
+        "import" => match arg {
+            Some(a) if !a.is_empty() => Command::Import(a.to_string()),
+            _ => Command::Unknown("import requires a file path".to_string()),
+        },
+        "usage" | "tokens" => Command::Usage,
+        "spend" | "cost" => Command::Spend,
+        "compact" => Command::Compact,
+        "checkpoints" => Command::Checkpoints,
+        "restore" => match arg {
+            Some(a) if !a.is_empty() => match a.parse::<i64>() {
+                Ok(id) => Command::Restore(Some(id)),
+                Err(_) => Command::Unknown("restore requires a numeric checkpoint ID".to_string()),
+            },
+            _ => Command::Restore(None), // restore latest
+        },
+        "set" => match arg {
+            Some(a) if !a.is_empty() => {
+                if let Some((key, value)) = a.split_once(char::is_whitespace) {
+                    Command::Set(key.trim().to_string(), value.trim().to_string())
+                } else {
+                    Command::Unknown("set requires key and value (e.g. :set temperature 0.7)".to_string())
+                }
+            }
+            _ => Command::Unknown("set requires key and value".to_string()),
         },
         other => Command::Unknown(other.to_string()),
     }
@@ -133,6 +175,63 @@ mod tests {
             parse_command("foobar"),
             Command::Unknown("foobar".to_string())
         );
+    }
+
+    #[test]
+    fn parse_export() {
+        assert_eq!(parse_command("export"), Command::Export);
+    }
+
+    #[test]
+    fn parse_import() {
+        assert_eq!(
+            parse_command("import /tmp/chat.json"),
+            Command::Import("/tmp/chat.json".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_import_without_arg() {
+        assert!(matches!(parse_command("import"), Command::Unknown(_)));
+    }
+
+    #[test]
+    fn parse_usage() {
+        assert_eq!(parse_command("usage"), Command::Usage);
+        assert_eq!(parse_command("tokens"), Command::Usage);
+    }
+
+    #[test]
+    fn parse_spend() {
+        assert_eq!(parse_command("spend"), Command::Spend);
+        assert_eq!(parse_command("cost"), Command::Spend);
+    }
+
+    #[test]
+    fn parse_compact() {
+        assert_eq!(parse_command("compact"), Command::Compact);
+    }
+
+    #[test]
+    fn parse_checkpoints() {
+        assert_eq!(parse_command("checkpoints"), Command::Checkpoints);
+    }
+
+    #[test]
+    fn parse_set() {
+        assert_eq!(
+            parse_command("set temperature 0.7"),
+            Command::Set("temperature".to_string(), "0.7".to_string())
+        );
+        assert!(matches!(parse_command("set"), Command::Unknown(_)));
+        assert!(matches!(parse_command("set temperature"), Command::Unknown(_)));
+    }
+
+    #[test]
+    fn parse_restore() {
+        assert_eq!(parse_command("restore"), Command::Restore(None));
+        assert_eq!(parse_command("restore 3"), Command::Restore(Some(3)));
+        assert!(matches!(parse_command("restore abc"), Command::Unknown(_)));
     }
 
     #[test]

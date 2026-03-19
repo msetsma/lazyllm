@@ -16,6 +16,7 @@ pub struct ModelSelector {
     pub(crate) model: String,
     pub(crate) mcp_server_count: usize,
     pub(crate) context_name: Option<String>,
+    pub(crate) context_usage_pct: Option<u32>,
 }
 
 impl ModelSelector {
@@ -25,6 +26,7 @@ impl ModelSelector {
             model,
             mcp_server_count: 0,
             context_name: None,
+            context_usage_pct: None,
         }
     }
 
@@ -34,6 +36,7 @@ impl ModelSelector {
             model: self.model.clone(),
             mcp_server_count: count,
             context_name: self.context_name.clone(),
+            context_usage_pct: self.context_usage_pct,
         }
     }
 }
@@ -71,6 +74,21 @@ impl Component for ModelSelector {
                 Style::default()
                     .fg(theme.highlight)
                     .add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        if let Some(pct) = self.context_usage_pct {
+            let color = if pct < 50 {
+                ratatui::style::Color::Green
+            } else if pct < 75 {
+                ratatui::style::Color::Yellow
+            } else {
+                ratatui::style::Color::Red
+            };
+            spans.push(Span::styled("  Ctx: ", Style::default().fg(theme.label)));
+            spans.push(Span::styled(
+                format!("{pct}%"),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
             ));
         }
 
