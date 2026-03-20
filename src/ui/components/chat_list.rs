@@ -147,6 +147,7 @@ impl Component for ChatList {
 mod tests {
     use super::*;
 
+    /// Verifies a new chat list starts with exactly one default item selected.
     #[test]
     fn new_chat_list_has_one_item() {
         let list = ChatList::new();
@@ -155,6 +156,7 @@ mod tests {
         assert_eq!(list.selected_index(), Some(0));
     }
 
+    /// Ensures adding a chat appends it and selects the new item.
     #[test]
     fn add_chat_appends_item() {
         let mut list = ChatList::new();
@@ -164,6 +166,7 @@ mod tests {
         assert_eq!(list.selected_index(), Some(1));
     }
 
+    /// Ensures removing the selected chat removes it and adjusts the list.
     #[test]
     fn remove_selected_removes_item() {
         let mut list = ChatList::new();
@@ -173,6 +176,7 @@ mod tests {
         assert_eq!(list.items[0], "New Chat");
     }
 
+    /// Ensures removing the last remaining item leaves an empty list with no selection.
     #[test]
     fn remove_selected_allows_removing_last_item() {
         let mut list = ChatList::new();
@@ -181,6 +185,7 @@ mod tests {
         assert_eq!(list.selected_index(), None);
     }
 
+    /// Verifies from_items creates a list with the given items and selects the first.
     #[test]
     fn from_items_creates_list() {
         let list = ChatList::from_items(vec!["A".to_string(), "B".to_string()]);
@@ -188,6 +193,7 @@ mod tests {
         assert_eq!(list.selected_index(), Some(0));
     }
 
+    /// Ensures from_items with an empty vec produces no selection.
     #[test]
     fn from_items_empty_has_no_selection() {
         let list = ChatList::from_items(vec![]);
@@ -195,6 +201,7 @@ mod tests {
         assert_eq!(list.selected_index(), None);
     }
 
+    /// Verifies update_item replaces the title at the given index without affecting others.
     #[test]
     fn update_item_changes_title() {
         let mut list = ChatList::from_items(vec!["Old".to_string(), "Other".to_string()]);
@@ -203,6 +210,7 @@ mod tests {
         assert_eq!(list.items[1], "Other");
     }
 
+    /// Ensures update_item with an out-of-bounds index is silently ignored.
     #[test]
     fn update_item_out_of_bounds_is_noop() {
         let mut list = ChatList::from_items(vec!["A".to_string()]);
@@ -210,6 +218,7 @@ mod tests {
         assert_eq!(list.items, vec!["A".to_string()]);
     }
 
+    /// Verifies select_next wraps around to the first item after the last.
     #[test]
     fn select_next_wraps_around() {
         let mut list = ChatList::new();
@@ -220,6 +229,7 @@ mod tests {
         assert_eq!(list.selected_index(), Some(0)); // wraps
     }
 
+    /// Verifies select_prev stays on the single item when there's only one.
     #[test]
     fn select_prev_wraps_around() {
         let mut list = ChatList::new();
@@ -228,6 +238,7 @@ mod tests {
         assert_eq!(list.selected_index(), Some(0)); // only 1 item, stays
     }
 
+    /// Ensures ScrollDown action advances the selection to the next item.
     #[test]
     fn handle_action_scroll_down_selects_next() {
         let mut list = ChatList::new();
@@ -237,6 +248,7 @@ mod tests {
         assert_eq!(list.selected_index(), Some(1));
     }
 
+    /// Ensures NewChat action adds a new "New Chat" entry to the list.
     #[test]
     fn handle_action_new_chat_adds_item() {
         let mut list = ChatList::new();
@@ -244,6 +256,7 @@ mod tests {
         assert_eq!(list.items.len(), 2);
     }
 
+    /// Ensures DeleteChat action removes the selected item from the list.
     #[test]
     fn handle_action_delete_chat_removes_item() {
         let mut list = ChatList::new();

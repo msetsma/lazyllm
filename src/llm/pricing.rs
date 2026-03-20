@@ -116,6 +116,7 @@ pub fn format_cost(cost: f64) -> String {
 mod tests {
     use super::*;
 
+    /// Verifies GPT-4o input/output pricing matches the published rates.
     #[test]
     fn gpt4o_pricing() {
         let p = get_pricing("gpt-4o").unwrap();
@@ -123,12 +124,14 @@ mod tests {
         assert!((p.output_per_million - 10.00).abs() < f64::EPSILON);
     }
 
+    /// Ensures GPT-4o-mini is matched separately from GPT-4o with lower pricing.
     #[test]
     fn gpt4o_mini_pricing() {
         let p = get_pricing("gpt-4o-mini").unwrap();
         assert!((p.input_per_million - 0.15).abs() < f64::EPSILON);
     }
 
+    /// Verifies Claude Sonnet pricing includes cache read/write rates.
     #[test]
     fn claude_sonnet_pricing() {
         let p = get_pricing("claude-sonnet-4-20250514").unwrap();
@@ -136,24 +139,28 @@ mod tests {
         assert!((p.cache_read_per_million - 0.30).abs() < f64::EPSILON);
     }
 
+    /// Verifies Claude Opus pricing at the premium tier.
     #[test]
     fn claude_opus_pricing() {
         let p = get_pricing("claude-opus-4-20250514").unwrap();
         assert!((p.input_per_million - 15.00).abs() < f64::EPSILON);
     }
 
+    /// Verifies Gemini Flash pricing at the budget tier.
     #[test]
     fn gemini_flash_pricing() {
         let p = get_pricing("gemini-2.0-flash").unwrap();
         assert!((p.input_per_million - 0.075).abs() < f64::EPSILON);
     }
 
+    /// Ensures local/unknown models return None so no cost is calculated.
     #[test]
     fn unknown_model_returns_none() {
         assert!(get_pricing("llama3.2:8b").is_none());
         assert!(get_pricing("my-custom-model").is_none());
     }
 
+    /// Validates cost calculation with all four token categories (input, output, cache read/write).
     #[test]
     fn cost_calculation() {
         let p = ModelPricing::new(3.00, 15.00).with_cache(0.30, 3.75);
@@ -162,6 +169,7 @@ mod tests {
         assert!((cost - expected).abs() < 1e-10);
     }
 
+    /// Validates cost calculation with zero cache tokens (non-Anthropic providers).
     #[test]
     fn cost_calculation_no_cache() {
         let p = ModelPricing::new(2.50, 10.00);
@@ -170,16 +178,19 @@ mod tests {
         assert!((cost - expected).abs() < 1e-10);
     }
 
+    /// Ensures sub-cent costs use 4 decimal places for precision.
     #[test]
     fn format_cost_small() {
         assert_eq!(format_cost(0.0035), "$0.0035");
     }
 
+    /// Ensures costs >= $0.01 use standard 2 decimal places.
     #[test]
     fn format_cost_large() {
         assert_eq!(format_cost(1.23), "$1.23");
     }
 
+    /// Verifies Claude Haiku pricing includes non-zero cache pricing tiers.
     #[test]
     fn claude_haiku_pricing() {
         let p = get_pricing("claude-3-haiku-20240307").unwrap();
@@ -188,29 +199,34 @@ mod tests {
         assert!(p.cache_write_per_million > 0.0);
     }
 
+    /// Verifies GPT-3.5 Turbo pricing at the legacy tier.
     #[test]
     fn gpt35_turbo_pricing() {
         let p = get_pricing("gpt-3.5-turbo").unwrap();
         assert!((p.input_per_million - 0.50).abs() < f64::EPSILON);
     }
 
+    /// Verifies O1 pricing at the premium reasoning tier.
     #[test]
     fn o1_pricing() {
         let p = get_pricing("o1-preview").unwrap();
         assert!((p.input_per_million - 15.00).abs() < f64::EPSILON);
     }
 
+    /// Verifies Gemini Pro pricing.
     #[test]
     fn gemini_pro_pricing() {
         let p = get_pricing("gemini-2.5-pro").unwrap();
         assert!((p.input_per_million - 1.25).abs() < f64::EPSILON);
     }
 
+    /// Ensures zero cost formats with 4 decimal places.
     #[test]
     fn format_cost_zero() {
         assert_eq!(format_cost(0.0), "$0.0000");
     }
 
+    /// Ensures ModelPricing::new() defaults cache pricing to zero for non-caching providers.
     #[test]
     fn model_pricing_new_defaults_cache_to_zero() {
         let p = ModelPricing::new(1.0, 2.0);

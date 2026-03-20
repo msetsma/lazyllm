@@ -265,6 +265,7 @@ mod tests {
     use super::*;
     use crate::llm::types::Message;
 
+    /// Verifies the provider reports the correct name for identification.
     #[test]
     fn google_provider_name() {
         let provider = GoogleProvider::new(
@@ -276,6 +277,7 @@ mod tests {
         assert_eq!(provider.name(), "google");
     }
 
+    /// Ensures configured models are returned in order from available_models().
     #[test]
     fn google_provider_models() {
         let provider = GoogleProvider::new(
@@ -292,6 +294,7 @@ mod tests {
         assert_eq!(models[0].id, "gemini-2.0-flash");
     }
 
+    /// Verifies the streaming URL includes model name, API key, and SSE alt parameter.
     #[test]
     fn stream_url_construction() {
         let provider = GoogleProvider::new(
@@ -306,6 +309,7 @@ mod tests {
         assert!(url.contains("alt=sse"));
     }
 
+    /// Verifies system messages are extracted into Gemini's systemInstruction field.
     #[test]
     fn gemini_request_extracts_system_instruction() {
         let chat_req = ChatRequest::new(
@@ -323,6 +327,7 @@ mod tests {
         assert_eq!(req.contents[0].role, "user");
     }
 
+    /// Ensures the "assistant" role is remapped to "model" for the Gemini API.
     #[test]
     fn gemini_request_maps_assistant_to_model() {
         let chat_req = ChatRequest::new(
@@ -341,6 +346,7 @@ mod tests {
         assert_eq!(req.contents[2].role, "user");
     }
 
+    /// Ensures requests without system messages omit the systemInstruction field.
     #[test]
     fn gemini_request_no_system() {
         let chat_req = ChatRequest::new(
@@ -352,6 +358,7 @@ mod tests {
         assert!(req.system_instruction.is_none());
     }
 
+    /// Verifies temperature and max_tokens are mapped to generationConfig.
     #[test]
     fn gemini_request_with_generation_config() {
         let chat_req = ChatRequest::new("gemini-2.0-flash", vec![Message::user("hi")])
@@ -364,6 +371,7 @@ mod tests {
         assert_eq!(config.max_output_tokens, Some(500));
     }
 
+    /// Verifies JSON serialization omits optional fields when not set.
     #[test]
     fn gemini_request_serializes_correctly() {
         let chat_req = ChatRequest::new("gemini-2.0-flash", vec![Message::user("hi")]);
@@ -377,6 +385,7 @@ mod tests {
         assert!(json.get("generationConfig").is_none());
     }
 
+    /// Verifies text content from Gemini SSE is parsed into Delta chunks.
     #[test]
     fn parse_gemini_delta() {
         let line = r#"data: {"candidates":[{"content":{"parts":[{"text":"Hello"}],"role":"model"},"index":0}]}"#;
@@ -384,6 +393,7 @@ mod tests {
         assert_eq!(chunk, StreamChunk::Delta("Hello".to_string()));
     }
 
+    /// Verifies finishReason=STOP is parsed as a Done signal.
     #[test]
     fn parse_gemini_stop() {
         let line = r#"data: {"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},"finishReason":"STOP","index":0}]}"#;
@@ -391,6 +401,7 @@ mod tests {
         assert_eq!(chunk, StreamChunk::Done);
     }
 
+    /// Verifies Gemini error responses are parsed into Error chunks.
     #[test]
     fn parse_gemini_error() {
         let line = r#"data: {"error":{"message":"quota exceeded"}}"#;
@@ -398,12 +409,14 @@ mod tests {
         assert_eq!(chunk, StreamChunk::Error("quota exceeded".to_string()));
     }
 
+    /// Ensures non-data SSE lines are silently skipped.
     #[test]
     fn parse_gemini_non_data_line_returns_none() {
         assert!(parse_gemini_sse("event: message").is_none());
         assert!(parse_gemini_sse("").is_none());
     }
 
+    /// Ensures malformed JSON produces an Error chunk rather than panicking.
     #[test]
     fn parse_gemini_invalid_json_returns_error() {
         let line = "data: {invalid}";
@@ -414,6 +427,7 @@ mod tests {
         }
     }
 
+    /// Verifies usageMetadata in STOP events is extracted as a Usage chunk with token counts.
     #[test]
     fn parse_gemini_stop_with_usage_metadata() {
         let line = r#"data: {"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":200,"totalTokenCount":215}}"#;

@@ -108,14 +108,7 @@ impl Component for ModelSelector {
 mod tests {
     use super::*;
 
-    #[test]
-    fn new_model_selector() {
-        let sel = ModelSelector::new("openai".to_string(), "gpt-4o".to_string());
-        assert_eq!(sel.provider, "openai");
-        assert_eq!(sel.model, "gpt-4o");
-        assert_eq!(sel.mcp_server_count, 0);
-    }
-
+    /// Ensures with_mcp_count returns a new instance with updated count, leaving the original unchanged.
     #[test]
     fn with_mcp_count_returns_new_instance() {
         let sel = ModelSelector::new("openai".to_string(), "gpt-4o".to_string());

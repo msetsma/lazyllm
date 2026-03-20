@@ -399,6 +399,7 @@ fn default_tool_panel_width() -> u16 {
 mod tests {
     use super::*;
 
+    /// Verifies the default AppConfig has expected provider, model, UI, and feature defaults.
     #[test]
     fn default_config_has_sensible_values() {
         let config = AppConfig::default();
@@ -423,6 +424,7 @@ mod tests {
         assert!(config.mcp.servers.is_empty());
     }
 
+    /// Ensures a minimal TOML with only [general] fills in defaults for all other sections.
     #[test]
     fn config_deserializes_from_minimal_toml() {
         let toml_str = r#"
@@ -438,6 +440,7 @@ default_model = "claude-sonnet-4-20250514"
         assert_eq!(config.ui.sidebar_width, 25);
     }
 
+    /// Verifies provider configs with api_key_env, base_url, and models deserialize correctly.
     #[test]
     fn config_deserializes_with_providers() {
         let toml_str = r#"
@@ -462,6 +465,7 @@ models = []
         );
     }
 
+    /// Verifies MCP server configs with name, command, args, and transport deserialize correctly.
     #[test]
     fn config_deserializes_with_mcp_servers() {
         let toml_str = r#"
@@ -483,6 +487,7 @@ url = "http://localhost:8080/sse"
         assert_eq!(config.mcp.servers[1].transport.as_deref(), Some("sse"));
     }
 
+    /// Ensures AppConfig survives a TOML serialize/deserialize roundtrip.
     #[test]
     fn config_serializes_roundtrip() {
         let config = AppConfig::default();
@@ -491,17 +496,20 @@ url = "http://localhost:8080/sse"
         assert_eq!(config, parsed);
     }
 
+    /// Ensures an empty TOML string produces the same result as Default::default().
     #[test]
     fn empty_toml_produces_defaults() {
         let config: AppConfig = toml::from_str("").unwrap();
         assert_eq!(config, AppConfig::default());
     }
 
+    /// Ensures the default config passes validation without errors.
     #[test]
     fn default_config_passes_validation() {
         AppConfig::default().validate().unwrap();
     }
 
+    /// Validates temperature accepts 0.0–2.0 and rejects values outside that range.
     #[test]
     fn temperature_boundary_values() {
         let mut config = AppConfig::default();
@@ -520,6 +528,7 @@ url = "http://localhost:8080/sse"
         assert!(errs[0].contains("temperature"));
     }
 
+    /// Ensures max_tokens = 0 is rejected by validation.
     #[test]
     fn max_tokens_zero_is_error() {
         let mut config = AppConfig::default();
@@ -528,6 +537,7 @@ url = "http://localhost:8080/sse"
         assert!(errs[0].contains("max_tokens"));
     }
 
+    /// Ensures max_tokens > 0 passes validation.
     #[test]
     fn max_tokens_positive_is_ok() {
         let mut config = AppConfig::default();
@@ -535,6 +545,7 @@ url = "http://localhost:8080/sse"
         assert!(config.validate().is_ok());
     }
 
+    /// Validates sidebar_width accepts 1–100 and rejects 0 and >100.
     #[test]
     fn sidebar_width_out_of_range() {
         let mut config = AppConfig::default();
@@ -552,6 +563,7 @@ url = "http://localhost:8080/sse"
         assert!(config.validate().is_ok());
     }
 
+    /// Validates tool_panel_width accepts 1–100 and rejects 0 and >100.
     #[test]
     fn tool_panel_width_out_of_range() {
         let mut config = AppConfig::default();
@@ -566,6 +578,7 @@ url = "http://localhost:8080/sse"
         assert!(config.validate().is_ok());
     }
 
+    /// Ensures an unsupported provider_type (e.g. "azure") is rejected by validation.
     #[test]
     fn invalid_provider_type_is_error() {
         let mut config = AppConfig::default();
@@ -584,6 +597,7 @@ url = "http://localhost:8080/sse"
         assert!(errs[0].contains("azure"));
     }
 
+    /// Ensures all supported provider types (openai, anthropic, ollama, google) pass validation.
     #[test]
     fn valid_provider_types_accepted() {
         for pt in &["openai", "anthropic", "ollama", "google"] {
@@ -602,6 +616,7 @@ url = "http://localhost:8080/sse"
         }
     }
 
+    /// Verifies validation collects all errors instead of stopping at the first one.
     #[test]
     fn multiple_errors_collected() {
         let mut config = AppConfig::default();
@@ -613,6 +628,7 @@ url = "http://localhost:8080/sse"
         assert_eq!(errs.len(), 3);
     }
 
+    /// Verifies ConversationConfig defaults match expected compaction, threshold, and budget values.
     #[test]
     fn conversation_config_defaults() {
         let config = ConversationConfig::default();
@@ -623,6 +639,7 @@ url = "http://localhost:8080/sse"
         assert!((config.budget_fraction - 0.80).abs() < f64::EPSILON);
     }
 
+    /// Verifies UsageConfig defaults: display flags enabled, no warning threshold, no custom pricing.
     #[test]
     fn usage_config_defaults() {
         let config = UsageConfig::default();
@@ -633,6 +650,7 @@ url = "http://localhost:8080/sse"
         assert!(config.custom_pricing.is_empty());
     }
 
+    /// Ensures [conversation] TOML section overrides all ConversationConfig fields.
     #[test]
     fn conversation_config_from_toml() {
         let toml_str = r#"
@@ -649,6 +667,7 @@ budget_fraction = 0.90
         assert!((config.conversation.budget_fraction - 0.90).abs() < f64::EPSILON);
     }
 
+    /// Ensures [usage] TOML section with custom pricing deserializes correctly.
     #[test]
     fn usage_config_from_toml() {
         let toml_str = r#"
@@ -666,6 +685,7 @@ output_per_million = 2.0
         assert!(config.usage.custom_pricing.contains_key("my-model"));
     }
 
+    /// Ensures an invalid compaction_strategy is rejected by validation.
     #[test]
     fn invalid_compaction_strategy_is_error() {
         let mut config = AppConfig::default();
@@ -674,6 +694,7 @@ output_per_million = 2.0
         assert!(errs[0].contains("compaction_strategy"));
     }
 
+    /// Validates budget_fraction rejects values below 0.1 and above 1.0.
     #[test]
     fn budget_fraction_out_of_range() {
         let mut config = AppConfig::default();
@@ -685,6 +706,7 @@ output_per_million = 2.0
         assert!(config.validate().is_ok());
     }
 
+    /// Validates compaction_threshold rejects values below 0.1 and above 1.0.
     #[test]
     fn compaction_threshold_out_of_range() {
         let mut config = AppConfig::default();
@@ -696,6 +718,7 @@ output_per_million = 2.0
         assert!(config.validate().is_ok());
     }
 
+    /// Ensures all supported compaction strategies (auto, none, truncation, summarization) pass.
     #[test]
     fn valid_compaction_strategies_accepted() {
         for strategy in &["auto", "none", "truncation", "summarization"] {
@@ -705,6 +728,7 @@ output_per_million = 2.0
         }
     }
 
+    /// Verifies custom pricing with all fields survives a TOML roundtrip.
     #[test]
     fn custom_pricing_roundtrip() {
         let toml_str = r#"
@@ -722,6 +746,7 @@ cache_write_per_million = 2.0
         assert!((pricing.cache_write_per_million - 2.0).abs() < f64::EPSILON);
     }
 
+    /// Ensures a config with all conversation and usage fields set deserializes and validates.
     #[test]
     fn config_with_all_new_sections() {
         let toml_str = r#"

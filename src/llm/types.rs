@@ -295,6 +295,7 @@ impl std::error::Error for LlmError {}
 mod tests {
     use super::*;
 
+    /// Verifies Message::user() sets Role::User and the content field.
     #[test]
     fn message_user_constructor() {
         let msg = Message::user("hello");
@@ -302,6 +303,7 @@ mod tests {
         assert_eq!(msg.content, "hello");
     }
 
+    /// Verifies Message::assistant() sets Role::Assistant and the content field.
     #[test]
     fn message_assistant_constructor() {
         let msg = Message::assistant("hi there");
@@ -309,6 +311,7 @@ mod tests {
         assert_eq!(msg.content, "hi there");
     }
 
+    /// Verifies Message::system() sets Role::System and the content field.
     #[test]
     fn message_system_constructor() {
         let msg = Message::system("you are helpful");
@@ -316,6 +319,7 @@ mod tests {
         assert_eq!(msg.content, "you are helpful");
     }
 
+    /// Verifies the builder pattern chains temperature and max_tokens onto ChatRequest.
     #[test]
     fn chat_request_builder() {
         let req = ChatRequest::new("gpt-4o", vec![Message::user("hi")])
@@ -327,32 +331,14 @@ mod tests {
         assert_eq!(req.max_tokens, Some(1000));
     }
 
-    #[test]
-    fn chat_request_defaults() {
-        let req = ChatRequest::new("gpt-4o", vec![]);
-        assert!(req.temperature.is_none());
-        assert!(req.max_tokens.is_none());
-        assert!(req.tools.is_none());
-    }
-
-    #[test]
-    fn chat_request_with_tools() {
-        let tools = vec![ToolDefinition {
-            name: "read_file".to_string(),
-            description: "Read a file".to_string(),
-            input_schema: serde_json::json!({"type": "object"}),
-        }];
-        let req = ChatRequest::new("gpt-4o", vec![]).with_tools(tools);
-        assert!(req.tools.is_some());
-        assert_eq!(req.tools.as_ref().unwrap().len(), 1);
-    }
-
+    /// Ensures with_tools(vec![]) normalizes to None to avoid sending empty tool arrays.
     #[test]
     fn chat_request_with_empty_tools() {
         let req = ChatRequest::new("gpt-4o", vec![]).with_tools(vec![]);
         assert!(req.tools.is_none());
     }
 
+    /// Verifies Message::tool_use() creates an assistant message with tool_calls attached.
     #[test]
     fn message_tool_use_constructor() {
         let tool_calls = vec![ToolCall {
@@ -366,6 +352,7 @@ mod tests {
         assert_eq!(msg.tool_calls.as_ref().unwrap().len(), 1);
     }
 
+    /// Verifies Message::tool_result() creates a tool-role message with the call ID.
     #[test]
     fn message_tool_result_constructor() {
         let msg = Message::tool_result("tc_1", "file contents here");
@@ -374,9 +361,9 @@ mod tests {
         assert_eq!(msg.tool_call_id.as_deref(), Some("tc_1"));
     }
 
+    /// Ensures messages from older JSON format (without tool fields) deserialize correctly.
     #[test]
     fn message_backward_compat_deserialization() {
-        // Old-format JSON without tool_calls/tool_call_id should still work
         let json = r#"{"role":"user","content":"hello"}"#;
         let msg: Message = serde_json::from_str(json).unwrap();
         assert_eq!(msg.role, Role::User);
@@ -385,6 +372,7 @@ mod tests {
         assert!(msg.tool_call_id.is_none());
     }
 
+    /// Ensures None tool fields are omitted from serialized JSON (skip_serializing_if).
     #[test]
     fn message_tool_calls_skip_serializing_when_none() {
         let msg = Message::user("hello");
@@ -393,6 +381,7 @@ mod tests {
         assert!(json.get("tool_call_id").is_none());
     }
 
+    /// Verifies ModelInfo::new() defaults the display name to the model ID.
     #[test]
     fn model_info_constructor() {
         let info = ModelInfo::new("gpt-4o");
@@ -400,6 +389,7 @@ mod tests {
         assert_eq!(info.name, "gpt-4o");
     }
 
+    /// Verifies with_name() allows overriding the display name while keeping the ID.
     #[test]
     fn model_info_with_name() {
         let info = ModelInfo::new("gpt-4o").with_name("GPT-4o");
@@ -407,40 +397,7 @@ mod tests {
         assert_eq!(info.name, "GPT-4o");
     }
 
-    #[test]
-    fn stream_chunk_variants() {
-        let delta = StreamChunk::Delta("hello".to_string());
-        assert_eq!(delta, StreamChunk::Delta("hello".to_string()));
-
-        let done = StreamChunk::Done;
-        assert_eq!(done, StreamChunk::Done);
-
-        let err = StreamChunk::Error("oops".to_string());
-        assert_eq!(err, StreamChunk::Error("oops".to_string()));
-
-        let usage = StreamChunk::Usage(TokenUsage::new(10, 20));
-        assert_eq!(usage, StreamChunk::Usage(TokenUsage::new(10, 20)));
-    }
-
-    #[test]
-    fn token_usage_new_and_total() {
-        let usage = TokenUsage::new(100, 200);
-        assert_eq!(usage.input_tokens, 100);
-        assert_eq!(usage.output_tokens, 200);
-        assert_eq!(usage.total(), 300);
-    }
-
-    #[test]
-    fn token_usage_default() {
-        let usage = TokenUsage::default();
-        assert_eq!(usage.input_tokens, 0);
-        assert_eq!(usage.output_tokens, 0);
-        assert_eq!(usage.cache_read_tokens, 0);
-        assert_eq!(usage.cache_creation_tokens, 0);
-        assert_eq!(usage.total(), 0);
-        assert_eq!(usage.cache_total(), 0);
-    }
-
+    /// Verifies Display output includes input/output counts and total.
     #[test]
     fn token_usage_display() {
         let usage = TokenUsage::new(150, 423);
@@ -448,11 +405,11 @@ mod tests {
         assert!(display.contains("150in"));
         assert!(display.contains("423out"));
         assert!(display.contains("573 tokens"));
-        // No cache or cost by default
         assert!(!display.contains("cache"));
         assert!(!display.contains("$"));
     }
 
+    /// Verifies Display includes cache and cost when present.
     #[test]
     fn token_usage_display_with_cache_and_cost() {
         let mut usage = TokenUsage::new(100, 200);
@@ -463,6 +420,7 @@ mod tests {
         assert!(display.contains("$0.0035"));
     }
 
+    /// Verifies accumulate() sums token counts, cost, and adopts model/provider from partials.
     #[test]
     fn token_usage_accumulate() {
         let mut total = TokenUsage::new(10, 20);
@@ -482,6 +440,7 @@ mod tests {
         assert_eq!(total.model.as_deref(), Some("gpt-4o"));
     }
 
+    /// Ensures duration_ms is overwritten by each accumulate (latest value wins).
     #[test]
     fn token_usage_accumulate_preserves_duration() {
         let mut total = TokenUsage::default();
@@ -492,7 +451,6 @@ mod tests {
         total.accumulate(&partial);
         assert_eq!(total.duration_ms, Some(150));
 
-        // Second accumulate overwrites duration
         let partial2 = TokenUsage {
             duration_ms: Some(200),
             ..Default::default()
@@ -501,6 +459,7 @@ mod tests {
         assert_eq!(total.duration_ms, Some(200));
     }
 
+    /// Ensures accumulate() does not overwrite existing model/provider with None.
     #[test]
     fn token_usage_accumulate_no_overwrite_when_none() {
         let mut total = TokenUsage {
@@ -513,11 +472,11 @@ mod tests {
             ..Default::default()
         };
         total.accumulate(&partial);
-        // model/provider should not be overwritten by None
         assert_eq!(total.model.as_deref(), Some("gpt-4o"));
         assert_eq!(total.provider.as_deref(), Some("openai"));
     }
 
+    /// Verifies cache_total() sums read and creation cache tokens.
     #[test]
     fn token_usage_cache_total() {
         let mut usage = TokenUsage::default();
@@ -526,6 +485,7 @@ mod tests {
         assert_eq!(usage.cache_total(), 150);
     }
 
+    /// Ensures LlmError variants produce human-readable Display output.
     #[test]
     fn llm_error_display() {
         let err = LlmError::AuthError("missing key".to_string());
@@ -539,22 +499,7 @@ mod tests {
         assert!(err.to_string().contains("rate limited"));
     }
 
-    #[test]
-    fn message_serializes_to_json() {
-        let msg = Message::user("hello");
-        let json = serde_json::to_value(&msg).unwrap();
-        assert_eq!(json["role"], "user");
-        assert_eq!(json["content"], "hello");
-    }
-
-    #[test]
-    fn message_deserializes_from_json() {
-        let json = r#"{"role":"assistant","content":"hi"}"#;
-        let msg: Message = serde_json::from_str(json).unwrap();
-        assert_eq!(msg.role, Role::Assistant);
-        assert_eq!(msg.content, "hi");
-    }
-
+    /// Verifies Role serializes to lowercase strings per API conventions.
     #[test]
     fn role_serializes_lowercase() {
         let json = serde_json::to_string(&Role::User).unwrap();

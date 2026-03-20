@@ -435,6 +435,7 @@ mod tests {
     use super::*;
     use crate::llm::types::Message;
 
+    /// Verifies the provider reports the correct name for identification.
     #[test]
     fn openai_provider_name() {
         let provider = OpenAiProvider::new(
@@ -446,6 +447,7 @@ mod tests {
         assert_eq!(provider.name(), "openai");
     }
 
+    /// Ensures configured models are returned in order from available_models().
     #[test]
     fn openai_provider_models() {
         let provider = OpenAiProvider::new(
@@ -463,6 +465,7 @@ mod tests {
         assert_eq!(models[1].id, "gpt-4o-mini");
     }
 
+    /// Ensures the chat completions URL is normalized with or without trailing slash.
     #[test]
     fn chat_url_construction() {
         let provider = OpenAiProvider::new(
@@ -473,7 +476,6 @@ mod tests {
         );
         assert_eq!(provider.chat_url(), "https://api.openai.com/v1/chat/completions");
 
-        // With trailing slash
         let provider = OpenAiProvider::new(
             "openai",
             "key",
@@ -483,6 +485,7 @@ mod tests {
         assert_eq!(provider.chat_url(), "https://api.openai.com/v1/chat/completions");
     }
 
+    /// Verifies ChatRequest fields (messages, temperature, max_tokens) are mapped correctly.
     #[test]
     fn openai_request_from_chat_request() {
         let chat_req = ChatRequest::new(
@@ -507,6 +510,7 @@ mod tests {
         assert_eq!(openai_req.max_tokens, Some(500));
     }
 
+    /// Verifies JSON serialization omits optional fields (temperature, tools) when not set.
     #[test]
     fn openai_request_serializes_correctly() {
         let chat_req = ChatRequest::new("gpt-4o", vec![Message::user("hi")]);
@@ -515,11 +519,12 @@ mod tests {
 
         assert_eq!(json["model"], "gpt-4o");
         assert_eq!(json["stream"], true);
-        assert!(json.get("temperature").is_none()); // skipped when None
+        assert!(json.get("temperature").is_none());
         assert!(json.get("max_tokens").is_none());
-        assert!(json.get("tools").is_none()); // skipped when None
+        assert!(json.get("tools").is_none());
     }
 
+    /// Verifies tool definitions are wrapped in OpenAI's {type: "function", function: ...} format.
     #[test]
     fn openai_request_with_tools() {
         let tools = vec![super::super::types::ToolDefinition {
@@ -538,6 +543,7 @@ mod tests {
         assert_eq!(tools[0]["function"]["name"], "read_file");
     }
 
+    /// Verifies tool_use and tool_result messages are mapped to OpenAI's assistant/tool roles.
     #[test]
     fn openai_request_with_tool_messages() {
         let tool_calls = vec![super::super::types::ToolCall {
@@ -560,6 +566,7 @@ mod tests {
         assert_eq!(openai_req.messages[2].tool_call_id.as_deref(), Some("call_123"));
     }
 
+    /// Verifies streamed tool call deltas are accumulated and reassembled correctly.
     #[test]
     fn tool_call_accumulator_basic() {
         let mut acc = ToolCallAccumulator::default();
@@ -587,6 +594,7 @@ mod tests {
         assert_eq!(calls[0].arguments, r#"{"path":"/"}"#);
     }
 
+    /// Verifies SSE delta content is parsed into text Delta chunks.
     #[test]
     fn parse_sse_delta_line() {
         let line = r#"data: {"id":"chatcmpl-123","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}"#;
@@ -594,6 +602,7 @@ mod tests {
         assert_eq!(chunk, StreamChunk::Delta("Hello".to_string()));
     }
 
+    /// Verifies the [DONE] sentinel is parsed as stream completion.
     #[test]
     fn parse_sse_done_line() {
         let line = "data: [DONE]";
@@ -601,6 +610,7 @@ mod tests {
         assert_eq!(chunk, StreamChunk::Done);
     }
 
+    /// Verifies finish_reason="stop" also signals stream completion.
     #[test]
     fn parse_sse_finish_reason_stop() {
         let line = r#"data: {"id":"chatcmpl-123","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#;
@@ -608,14 +618,15 @@ mod tests {
         assert_eq!(chunk, StreamChunk::Done);
     }
 
+    /// Ensures role-only initial deltas (no content) are skipped.
     #[test]
     fn parse_sse_empty_delta_returns_none() {
-        // Initial chunk often has role but no content
         let line = r#"data: {"id":"chatcmpl-123","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}"#;
         let chunk = parse_sse_line(line);
         assert!(chunk.is_none());
     }
 
+    /// Ensures non-data SSE lines (event:, comments, empty) are silently skipped.
     #[test]
     fn parse_sse_non_data_line_returns_none() {
         assert!(parse_sse_line("event: message").is_none());
@@ -623,6 +634,7 @@ mod tests {
         assert!(parse_sse_line(": comment").is_none());
     }
 
+    /// Ensures malformed JSON produces an Error chunk rather than panicking.
     #[test]
     fn parse_sse_invalid_json_returns_error() {
         let line = "data: {invalid json}";
@@ -633,6 +645,7 @@ mod tests {
         }
     }
 
+    /// Verifies usage data (prompt_tokens, completion_tokens) is extracted from SSE chunks.
     #[test]
     fn parse_sse_usage_chunk() {
         let line = r#"data: {"id":"chatcmpl-123","choices":[],"usage":{"prompt_tokens":25,"completion_tokens":42,"total_tokens":67}}"#;

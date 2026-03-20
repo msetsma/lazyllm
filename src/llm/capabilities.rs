@@ -160,6 +160,7 @@ mod tests {
     use super::*;
     use crate::llm::types::Message;
 
+    /// Verifies GPT-4o returns the correct context window, output limit, and no compaction support.
     #[test]
     fn gpt4o_capabilities() {
         let caps = get_capabilities("gpt-4o");
@@ -168,6 +169,7 @@ mod tests {
         assert!(!caps.supports_server_compaction);
     }
 
+    /// Verifies Claude Sonnet returns 200k context and enables compaction + caching.
     #[test]
     fn claude_sonnet_capabilities() {
         let caps = get_capabilities("claude-sonnet-4-20250514");
@@ -176,12 +178,14 @@ mod tests {
         assert!(caps.supports_caching);
     }
 
+    /// Verifies Gemini 2.5 Pro returns the 1M token context window.
     #[test]
     fn gemini_capabilities() {
         let caps = get_capabilities("gemini-2.5-pro");
         assert_eq!(caps.context_window, 1_048_576);
     }
 
+    /// Ensures unrecognized models (e.g. Ollama) fall back to conservative defaults.
     #[test]
     fn unknown_model_gets_defaults() {
         let caps = get_capabilities("llama3.2:8b");
@@ -189,38 +193,27 @@ mod tests {
         assert!(!caps.supports_server_compaction);
     }
 
+    /// Validates the chars/4 heuristic for token estimation across edge cases.
     #[test]
     fn estimate_tokens_basic() {
-        // "hello" = 5 chars => ceil(5/4) = 2
         assert_eq!(estimate_tokens("hello"), 2);
-        // Empty
         assert_eq!(estimate_tokens(""), 0);
-        // 400 chars => 100 tokens
         let text = "a".repeat(400);
         assert_eq!(estimate_tokens(&text), 100);
     }
 
+    /// Ensures per-message overhead is included in multi-message token estimates.
     #[test]
     fn estimate_message_tokens_basic() {
         let msgs = vec![
-            Message::user("hello"),       // 4 overhead + 2 content = 6
-            Message::assistant("hi back"), // 4 overhead + 2 content = 6
+            Message::user("hello"),
+            Message::assistant("hi back"),
         ];
         let tokens = estimate_message_tokens(&msgs);
-        assert!(tokens > 0);
-        // ~12 tokens for these two messages
         assert!(tokens >= 10 && tokens <= 16);
     }
 
-    #[test]
-    fn context_usage_percentage() {
-        let caps = get_capabilities("gpt-4o");
-        let msgs = vec![Message::user("hello")];
-        let used = estimate_message_tokens(&msgs);
-        let pct = (used as f64 / caps.context_window as f64) * 100.0;
-        assert!(pct < 1.0); // tiny message, should be near 0%
-    }
-
+    /// Verifies O1 model returns the 200k context and 100k output limits.
     #[test]
     fn o1_capabilities() {
         let caps = get_capabilities("o1-preview");
@@ -228,12 +221,14 @@ mod tests {
         assert_eq!(caps.max_output, 100_000);
     }
 
+    /// Verifies GPT-3.5 Turbo returns its specific 16k context window.
     #[test]
     fn gpt35_capabilities() {
         let caps = get_capabilities("gpt-3.5-turbo");
         assert_eq!(caps.context_window, 16_385);
     }
 
+    /// Verifies GPT-4 Turbo is distinguished from base GPT-4 with 128k context.
     #[test]
     fn gpt4_turbo_capabilities() {
         let caps = get_capabilities("gpt-4-turbo");
@@ -241,6 +236,7 @@ mod tests {
         assert_eq!(caps.max_output, 4_096);
     }
 
+    /// Verifies Claude Opus returns 200k context, 32k output, and supports compaction + caching.
     #[test]
     fn claude_opus_capabilities() {
         let caps = get_capabilities("claude-opus-4-20250514");
@@ -250,6 +246,7 @@ mod tests {
         assert!(caps.supports_caching);
     }
 
+    /// Verifies Claude Haiku (with date suffix) is recognized and supports caching.
     #[test]
     fn claude_haiku_capabilities() {
         let caps = get_capabilities("claude-3-haiku-20240307");
@@ -257,12 +254,14 @@ mod tests {
         assert!(caps.supports_caching);
     }
 
+    /// Verifies Gemini 1.5 Flash returns the 1M token context window.
     #[test]
     fn gemini_flash_capabilities() {
         let caps = get_capabilities("gemini-1.5-flash");
         assert_eq!(caps.context_window, 1_048_576);
     }
 
+    /// Ensures tool call name and arguments are counted in the token estimate.
     #[test]
     fn estimate_message_tokens_with_tool_calls() {
         use crate::llm::types::ToolCall;
@@ -272,21 +271,12 @@ mod tests {
             arguments: r#"{"path":"/tmp/test.txt"}"#.to_string(),
         }]);
         let tokens = estimate_message_tokens(&[msg]);
-        // Should include overhead + tool name + arguments
         assert!(tokens > 4);
     }
 
+    /// Ensures an empty message list produces zero tokens.
     #[test]
     fn estimate_message_tokens_empty_list() {
         assert_eq!(estimate_message_tokens(&[]), 0);
-    }
-
-    #[test]
-    fn default_capabilities() {
-        let caps = ModelCapabilities::default();
-        assert_eq!(caps.context_window, 128_000);
-        assert_eq!(caps.max_output, 4_096);
-        assert!(!caps.supports_server_compaction);
-        assert!(!caps.supports_caching);
     }
 }

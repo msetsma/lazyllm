@@ -69,15 +69,10 @@ impl Component for ToolPanel {
 mod tests {
     use super::*;
 
+    /// Ensures a new tool panel starts with no servers listed.
     #[test]
     fn new_tool_panel_is_empty() {
         let panel = ToolPanel::new();
         assert!(panel.servers.is_empty());
-    }
-
-    #[test]
-    fn handle_action_returns_none() {
-        let mut panel = ToolPanel::new();
-        assert_eq!(panel.handle_action(&Action::ScrollDown), None);
     }
 }

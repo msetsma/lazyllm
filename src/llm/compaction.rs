@@ -151,6 +151,7 @@ mod tests {
             .collect()
     }
 
+    /// Ensures truncation is a no-op when message count is already under the limit.
     #[test]
     fn truncate_no_op_when_under_limit() {
         let msgs = sample_messages(5);
@@ -160,6 +161,7 @@ mod tests {
         assert_eq!(result.removed_count, 0);
     }
 
+    /// Verifies truncation drops the oldest messages and keeps the newest ones.
     #[test]
     fn truncate_removes_oldest() {
         let msgs = sample_messages(20);
@@ -167,24 +169,23 @@ mod tests {
         assert_eq!(result.messages.len(), 10);
         assert_eq!(result.removed_count, 10);
         assert!(result.summary.is_some());
-        // Should keep the newest messages
         assert_eq!(result.messages[0].content, "Question 10");
         assert_eq!(result.messages.last().unwrap().content, "Answer 19");
     }
 
+    /// Verifies summarization splits messages and generates a prompt from the removed portion.
     #[test]
     fn prepare_summarization_splits_correctly() {
         let msgs = sample_messages(20);
         let result = prepare_client_summarization(&msgs, 10);
         assert_eq!(result.messages.len(), 10);
         assert_eq!(result.removed_count, 10);
-        assert!(result.summary.is_some());
-        // Summary should contain the prompt
         let summary = result.summary.unwrap();
         assert!(summary.contains("Summarize"));
         assert!(summary.contains("Question 0"));
     }
 
+    /// Ensures summarization is a no-op when message count is under the limit.
     #[test]
     fn prepare_summarization_no_op_when_under_limit() {
         let msgs = sample_messages(5);
@@ -193,6 +194,7 @@ mod tests {
         assert!(result.summary.is_none());
     }
 
+    /// Validates the summarization prompt includes message roles and content.
     #[test]
     fn build_summarization_prompt_format() {
         let msgs = vec![
@@ -205,6 +207,7 @@ mod tests {
         assert!(prompt.contains("Summarize"));
     }
 
+    /// Ensures Anthropic provider auto-selects summarization (supports caching).
     #[test]
     fn auto_select_for_anthropic() {
         assert_eq!(
@@ -213,6 +216,7 @@ mod tests {
         );
     }
 
+    /// Ensures Ollama provider auto-selects truncation (local, no caching).
     #[test]
     fn auto_select_for_ollama() {
         assert_eq!(
@@ -221,6 +225,7 @@ mod tests {
         );
     }
 
+    /// Validates parsing of all strategy string variants including unknown fallback.
     #[test]
     fn strategy_from_str() {
         assert_eq!(CompactionStrategy::from_str("none"), CompactionStrategy::None);
@@ -229,6 +234,7 @@ mod tests {
         assert_eq!(CompactionStrategy::from_str("unknown"), CompactionStrategy::Truncation);
     }
 
+    /// Ensures strategy serialization and parsing are inverse operations.
     #[test]
     fn strategy_roundtrip() {
         for s in &[CompactionStrategy::None, CompactionStrategy::Truncation, CompactionStrategy::ClientSummarization] {

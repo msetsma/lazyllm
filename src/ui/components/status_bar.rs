@@ -96,6 +96,7 @@ impl Component for StatusBar {
 mod tests {
     use super::*;
 
+    /// Ensures a new status bar starts in Normal mode with no status message.
     #[test]
     fn new_status_bar_defaults_to_normal() {
         let bar = StatusBar::new();
@@ -103,6 +104,7 @@ mod tests {
         assert!(bar.status_message.is_none());
     }
 
+    /// Verifies set_mode changes the displayed mode.
     #[test]
     fn set_mode_updates_in_place() {
         let mut bar = StatusBar::new();
@@ -110,6 +112,7 @@ mod tests {
         assert_eq!(bar.mode, Mode::Insert);
     }
 
+    /// Verifies set_status stores the message for display.
     #[test]
     fn set_status_updates_in_place() {
         let mut bar = StatusBar::new();
@@ -117,6 +120,7 @@ mod tests {
         assert_eq!(bar.status_message.as_deref(), Some("streaming..."));
     }
 
+    /// Ensures hint_text returns mode-appropriate instructions (quit, send, copy, execute).
     #[test]
     fn hint_text_varies_by_mode() {
         let mut bar = StatusBar::new();
@@ -132,6 +136,7 @@ mod tests {
         assert!(bar.hint_text().contains("execute"));
     }
 
+    /// Ensures SwitchMode action updates the status bar's mode display.
     #[test]
     fn handle_action_updates_mode() {
         let mut bar = StatusBar::new();

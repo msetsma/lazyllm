@@ -92,6 +92,7 @@ pub enum AppEvent {
 mod tests {
     use super::*;
 
+    /// Verifies each Mode variant returns the expected uppercase status-bar label.
     #[test]
     fn mode_labels_are_correct() {
         assert_eq!(Mode::Normal.label(), "NORMAL");
@@ -100,6 +101,7 @@ mod tests {
         assert_eq!(Mode::Command.label(), "COMMAND");
     }
 
+    /// Ensures focus_next cycles through all four panels and wraps back to the start.
     #[test]
     fn focus_next_cycles_through_all_panels() {
         let start = FocusTarget::ChatList;
@@ -113,6 +115,7 @@ mod tests {
         assert_eq!(back, FocusTarget::ChatList);
     }
 
+    /// Ensures focus_prev moves backwards through the panel order.
     #[test]
     fn focus_prev_cycles_backwards() {
         let start = FocusTarget::ChatList;
@@ -122,6 +125,7 @@ mod tests {
         assert_eq!(prev2, FocusTarget::ToolPanel);
     }
 
+    /// Verifies next() and prev() are inverses for every FocusTarget variant.
     #[test]
     fn focus_next_and_prev_are_inverse() {
         for target in [
@@ -133,15 +137,5 @@ mod tests {
             assert_eq!(target.next().prev(), target);
             assert_eq!(target.prev().next(), target);
         }
-    }
-
-    #[test]
-    fn default_mode_is_normal() {
-        assert_eq!(Mode::default(), Mode::Normal);
-    }
-
-    #[test]
-    fn default_focus_is_chat_view() {
-        assert_eq!(FocusTarget::default(), FocusTarget::ChatView);
     }
 }

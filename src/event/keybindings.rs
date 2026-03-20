@@ -98,6 +98,7 @@ mod tests {
         KeyEvent::new(code, mods)
     }
 
+    /// Verifies Ctrl+C triggers Quit in all input modes.
     #[test]
     fn ctrl_c_quits_in_any_mode() {
         let ctrl_c = key_with_mods(KeyCode::Char('c'), KeyModifiers::CONTROL);
@@ -111,6 +112,7 @@ mod tests {
         }
     }
 
+    /// Ensures 'q' in Normal mode triggers Quit.
     #[test]
     fn normal_mode_q_quits() {
         assert_eq!(
@@ -119,6 +121,7 @@ mod tests {
         );
     }
 
+    /// Ensures 'i' in Normal mode switches to Insert mode.
     #[test]
     fn normal_mode_i_enters_insert() {
         assert_eq!(
@@ -127,6 +130,7 @@ mod tests {
         );
     }
 
+    /// Ensures Tab in Normal mode advances focus to the next panel.
     #[test]
     fn normal_mode_tab_focuses_next() {
         assert_eq!(
@@ -135,6 +139,7 @@ mod tests {
         );
     }
 
+    /// Ensures Shift+Tab in Normal mode moves focus to the previous panel.
     #[test]
     fn normal_mode_backtab_focuses_prev() {
         assert_eq!(
@@ -143,6 +148,7 @@ mod tests {
         );
     }
 
+    /// Verifies vim-style j/k keys produce ScrollDown/ScrollUp in Normal mode.
     #[test]
     fn normal_mode_jk_scrolls() {
         assert_eq!(
@@ -155,6 +161,7 @@ mod tests {
         );
     }
 
+    /// Ensures Esc in Insert mode returns to Normal mode.
     #[test]
     fn insert_mode_esc_returns_to_normal() {
         assert_eq!(
@@ -163,6 +170,7 @@ mod tests {
         );
     }
 
+    /// Verifies character keys in Insert mode produce InsertChar actions.
     #[test]
     fn insert_mode_typing_produces_insert_char() {
         assert_eq!(
@@ -171,6 +179,7 @@ mod tests {
         );
     }
 
+    /// Ensures Enter in Insert mode triggers SendMessage.
     #[test]
     fn insert_mode_enter_sends_message() {
         assert_eq!(
@@ -179,6 +188,7 @@ mod tests {
         );
     }
 
+    /// Ensures Backspace in Insert mode triggers DeleteChar.
     #[test]
     fn insert_mode_backspace_deletes() {
         assert_eq!(
@@ -187,6 +197,7 @@ mod tests {
         );
     }
 
+    /// Ensures Esc in Visual mode returns to Normal mode.
     #[test]
     fn visual_mode_esc_returns_to_normal() {
         assert_eq!(
@@ -195,6 +206,7 @@ mod tests {
         );
     }
 
+    /// Ensures Esc in Command mode returns to Normal mode.
     #[test]
     fn command_mode_esc_returns_to_normal() {
         assert_eq!(
@@ -203,6 +215,7 @@ mod tests {
         );
     }
 
+    /// Ensures Enter in Command mode triggers InputSubmit.
     #[test]
     fn command_mode_enter_submits() {
         assert_eq!(
@@ -211,6 +224,7 @@ mod tests {
         );
     }
 
+    /// Verifies '?' in Normal mode toggles the help overlay.
     #[test]
     fn normal_mode_question_mark_toggles_help() {
         assert_eq!(
@@ -219,6 +233,7 @@ mod tests {
         );
     }
 
+    /// Ensures 'n' in Normal mode with ChatList focus triggers NewChat.
     #[test]
     fn normal_mode_n_creates_new_chat() {
         assert_eq!(
@@ -227,6 +242,7 @@ mod tests {
         );
     }
 
+    /// Verifies unrecognized keys produce Action::None rather than panicking.
     #[test]
     fn unbound_keys_produce_none() {
         assert_eq!(

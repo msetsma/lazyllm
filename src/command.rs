@@ -90,6 +90,7 @@ pub fn parse_command(input: &str) -> Command {
 mod tests {
     use super::*;
 
+    /// Ensures "q", "quit", and whitespace-padded variants all parse to Command::Quit.
     #[test]
     fn parse_quit() {
         assert_eq!(parse_command("q"), Command::Quit);
@@ -97,6 +98,7 @@ mod tests {
         assert_eq!(parse_command("  quit  "), Command::Quit);
     }
 
+    /// Verifies ":model <name>" correctly extracts the model name argument.
     #[test]
     fn parse_model() {
         assert_eq!(
@@ -109,12 +111,14 @@ mod tests {
         );
     }
 
+    /// Ensures ":model" without an argument is rejected as Unknown.
     #[test]
     fn parse_model_without_arg() {
         assert!(matches!(parse_command("model"), Command::Unknown(_)));
         assert!(matches!(parse_command("model  "), Command::Unknown(_)));
     }
 
+    /// Verifies ":provider <name>" correctly extracts the provider name.
     #[test]
     fn parse_provider() {
         assert_eq!(
@@ -123,32 +127,38 @@ mod tests {
         );
     }
 
+    /// Ensures ":provider" without an argument is rejected as Unknown.
     #[test]
     fn parse_provider_without_arg() {
         assert!(matches!(parse_command("provider"), Command::Unknown(_)));
     }
 
+    /// Ensures ":new" parses to the NewChat command.
     #[test]
     fn parse_new_chat() {
         assert_eq!(parse_command("new"), Command::NewChat);
     }
 
+    /// Ensures both "delete" and "del" aliases parse to DeleteChat.
     #[test]
     fn parse_delete_chat() {
         assert_eq!(parse_command("delete"), Command::DeleteChat);
         assert_eq!(parse_command("del"), Command::DeleteChat);
     }
 
+    /// Ensures ":help" parses to the Help command.
     #[test]
     fn parse_help() {
         assert_eq!(parse_command("help"), Command::Help);
     }
 
+    /// Ensures ":clear" parses to the Clear command.
     #[test]
     fn parse_clear() {
         assert_eq!(parse_command("clear"), Command::Clear);
     }
 
+    /// Verifies ":context <name>" and ":ctx <name>" extract the context name.
     #[test]
     fn parse_context_with_name() {
         assert_eq!(
@@ -161,6 +171,7 @@ mod tests {
         );
     }
 
+    /// Ensures "none", "clear", and bare ":context"/":ctx" all clear the active context.
     #[test]
     fn parse_context_clear() {
         assert_eq!(parse_command("context none"), Command::Context(None));
@@ -169,6 +180,7 @@ mod tests {
         assert_eq!(parse_command("ctx"), Command::Context(None));
     }
 
+    /// Ensures unrecognized input produces Command::Unknown with the raw text.
     #[test]
     fn parse_unknown() {
         assert_eq!(
@@ -177,11 +189,13 @@ mod tests {
         );
     }
 
+    /// Ensures ":export" parses to the Export command.
     #[test]
     fn parse_export() {
         assert_eq!(parse_command("export"), Command::Export);
     }
 
+    /// Verifies ":import <path>" extracts the file path argument.
     #[test]
     fn parse_import() {
         assert_eq!(
@@ -190,33 +204,39 @@ mod tests {
         );
     }
 
+    /// Ensures ":import" without a path argument is rejected as Unknown.
     #[test]
     fn parse_import_without_arg() {
         assert!(matches!(parse_command("import"), Command::Unknown(_)));
     }
 
+    /// Ensures both "usage" and "tokens" aliases parse to the Usage command.
     #[test]
     fn parse_usage() {
         assert_eq!(parse_command("usage"), Command::Usage);
         assert_eq!(parse_command("tokens"), Command::Usage);
     }
 
+    /// Ensures both "spend" and "cost" aliases parse to the Spend command.
     #[test]
     fn parse_spend() {
         assert_eq!(parse_command("spend"), Command::Spend);
         assert_eq!(parse_command("cost"), Command::Spend);
     }
 
+    /// Ensures ":compact" parses to the Compact command.
     #[test]
     fn parse_compact() {
         assert_eq!(parse_command("compact"), Command::Compact);
     }
 
+    /// Ensures ":checkpoints" parses to the Checkpoints command.
     #[test]
     fn parse_checkpoints() {
         assert_eq!(parse_command("checkpoints"), Command::Checkpoints);
     }
 
+    /// Verifies ":set key value" extracts both arguments, and rejects missing arguments.
     #[test]
     fn parse_set() {
         assert_eq!(
@@ -227,6 +247,7 @@ mod tests {
         assert!(matches!(parse_command("set temperature"), Command::Unknown(_)));
     }
 
+    /// Verifies ":restore" works with optional checkpoint index and rejects non-numeric args.
     #[test]
     fn parse_restore() {
         assert_eq!(parse_command("restore"), Command::Restore(None));
@@ -234,6 +255,7 @@ mod tests {
         assert!(matches!(parse_command("restore abc"), Command::Unknown(_)));
     }
 
+    /// Ensures empty and whitespace-only input produce Command::Unknown.
     #[test]
     fn parse_empty_input() {
         assert_eq!(parse_command(""), Command::Unknown("".to_string()));

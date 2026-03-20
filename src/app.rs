@@ -1582,6 +1582,7 @@ mod tests {
         (app, tmp)
     }
 
+    /// Verifies the app starts in Normal mode, focused on ChatView, with an empty conversation.
     #[tokio::test]
     async fn new_app_is_running_in_normal_mode() {
         let app = test_app();
@@ -1593,6 +1594,7 @@ mod tests {
         assert!(app.conversations.active_conversation.is_none());
     }
 
+    /// Ensures the Quit action sets running to false, stopping the app loop.
     #[tokio::test]
     async fn quit_action_stops_app() {
         let mut app = test_app();
@@ -1600,6 +1602,7 @@ mod tests {
         assert!(!app.running);
     }
 
+    /// Verifies that switching to Insert mode moves focus to the input box.
     #[tokio::test]
     async fn switch_to_insert_mode_focuses_input() {
         let mut app = test_app();
@@ -1608,6 +1611,7 @@ mod tests {
         assert_eq!(app.focus, FocusTarget::Input);
     }
 
+    /// Ensures FocusNext cycles from ChatView to the next panel (ToolPanel).
     #[tokio::test]
     async fn focus_next_cycles_panels() {
         let mut app = test_app();
@@ -1615,6 +1619,7 @@ mod tests {
         assert_eq!(app.focus, FocusTarget::ToolPanel);
     }
 
+    /// Ensures FocusPrev cycles backwards from ChatView to ChatList.
     #[tokio::test]
     async fn focus_prev_cycles_backwards() {
         let mut app = test_app();
@@ -1622,6 +1627,7 @@ mod tests {
         assert_eq!(app.focus, FocusTarget::ChatList);
     }
 
+    /// Verifies that sending a message adds it to the chat view with correct role and timestamp.
     #[tokio::test]
     async fn send_message_adds_to_chat() {
         let mut app = test_app();
@@ -1636,6 +1642,7 @@ mod tests {
         assert!(app.input_box.content.is_empty());
     }
 
+    /// Ensures sending an empty message is a no-op (no message added to chat).
     #[tokio::test]
     async fn send_empty_message_does_nothing() {
         let mut app = test_app();
@@ -1643,6 +1650,7 @@ mod tests {
         assert!(app.chat_view.messages.is_empty());
     }
 
+    /// Ensures sending a whitespace-only message is a no-op.
     #[tokio::test]
     async fn send_whitespace_only_message_does_nothing() {
         let mut app = test_app();
@@ -1651,6 +1659,7 @@ mod tests {
         assert!(app.chat_view.messages.is_empty());
     }
 
+    /// Verifies InsertChar appends characters and DeleteChar removes the last one.
     #[tokio::test]
     async fn insert_and_delete_chars() {
         let mut app = test_app();
@@ -1661,6 +1670,7 @@ mod tests {
         assert_eq!(app.input_box.content, "a");
     }
 
+    /// Ensures ScrollUp dispatches to the focused panel and increments its scroll offset.
     #[tokio::test]
     async fn scroll_dispatches_to_focused_panel() {
         let mut app = test_app();
@@ -1668,6 +1678,7 @@ mod tests {
         assert_eq!(app.chat_view.scroll_offset, 1);
     }
 
+    /// Verifies ToggleHelp flips the help overlay visibility on and off.
     #[tokio::test]
     async fn toggle_help_overlay() {
         let mut app = test_app();
@@ -1677,6 +1688,7 @@ mod tests {
         assert!(!app.help_overlay.visible);
     }
 
+    /// Ensures the model selector widget is initialized from config defaults.
     #[tokio::test]
     async fn model_selector_reflects_config() {
         let mut config = AppConfig::default();
@@ -1687,6 +1699,7 @@ mod tests {
         assert_eq!(app.model_selector.model, "claude-sonnet-4-20250514");
     }
 
+    /// Verifies stream deltas are concatenated into the last assistant message and streaming ends on Done.
     #[tokio::test]
     async fn drain_stream_chunks_appends_deltas() {
         let mut app = test_app();
@@ -1713,6 +1726,7 @@ mod tests {
         assert!(!app.streaming);
     }
 
+    /// Ensures stream errors append an error tag to the assistant message and stop streaming.
     #[tokio::test]
     async fn drain_stream_handles_error() {
         let mut app = test_app();
@@ -1738,6 +1752,7 @@ mod tests {
         assert!(!app.streaming);
     }
 
+    /// Ensures a dropped sender (disconnect) gracefully stops streaming without panic.
     #[tokio::test]
     async fn drain_stream_handles_disconnect() {
         let mut app = test_app();
@@ -1758,6 +1773,7 @@ mod tests {
         assert!(!app.streaming);
     }
 
+    /// Verifies sending a message with no registered provider shows a "No provider" status error.
     #[tokio::test]
     async fn send_message_without_provider_shows_status() {
         let mut app = test_app();
@@ -1770,6 +1786,7 @@ mod tests {
         assert!(status.contains("No provider"));
     }
 
+    /// Ensures the Tick action triggers drain_stream_chunks to process pending stream data.
     #[tokio::test]
     async fn tick_drains_stream_chunks() {
         let mut app = test_app();
@@ -1796,6 +1813,7 @@ mod tests {
         assert!(!app.streaming);
     }
 
+    /// Verifies CopySelection copies the last assistant message and shows a status confirmation.
     #[tokio::test]
     async fn copy_selection_copies_last_assistant() {
         let mut app = test_app();
@@ -1813,6 +1831,7 @@ mod tests {
             .contains("Copied:"));
     }
 
+    /// Ensures CopySelection with no assistant messages shows an error status.
     #[tokio::test]
     async fn copy_selection_no_assistant_shows_error() {
         let mut app = test_app();
@@ -1825,6 +1844,7 @@ mod tests {
             .contains("No assistant message"));
     }
 
+    /// Ensures the theme is loaded from config, defaulting to cyan focused borders.
     #[tokio::test]
     async fn theme_is_loaded_from_config() {
         let app = test_app();
@@ -1832,6 +1852,7 @@ mod tests {
         assert_eq!(app.theme.border_focused, ratatui::style::Color::Cyan);
     }
 
+    /// Verifies the show_timestamps config flag is propagated to the chat view widget.
     #[tokio::test]
     async fn show_timestamps_propagated_to_chat_view() {
         let mut config = AppConfig::default();
@@ -1842,6 +1863,7 @@ mod tests {
 
     // ── Store integration tests ──
 
+    /// Ensures an app with a fresh store starts with an empty conversation list.
     #[tokio::test]
     async fn app_with_store_starts_with_empty_list() {
         let (app, _tmp) = test_app_with_store();
@@ -1850,6 +1872,7 @@ mod tests {
         assert!(app.chat_list.items.is_empty());
     }
 
+    /// Verifies NewChat creates a conversation entry in both the UI list and the store.
     #[tokio::test]
     async fn new_chat_creates_conversation_with_store() {
         let (mut app, _tmp) = test_app_with_store();
@@ -1861,6 +1884,7 @@ mod tests {
         assert_eq!(app.conversations.active_conversation.as_ref().unwrap().title, "New Chat");
     }
 
+    /// Ensures a new conversation is persisted to the backing store on disk.
     #[tokio::test]
     async fn new_chat_persists_to_disk() {
         let (mut app, _tmp) = test_app_with_store();
@@ -1871,6 +1895,7 @@ mod tests {
         assert_eq!(summaries.len(), 1);
     }
 
+    /// Verifies sending a message auto-creates a conversation when none exists.
     #[tokio::test]
     async fn send_message_creates_conversation_if_none() {
         let (mut app, _tmp) = test_app_with_store();
@@ -1884,6 +1909,7 @@ mod tests {
         assert_eq!(conv.messages[0].content, "hi");
     }
 
+    /// Ensures the first message auto-titles the conversation using the message content.
     #[tokio::test]
     async fn send_message_auto_titles_conversation() {
         let (mut app, _tmp) = test_app_with_store();
@@ -1898,6 +1924,7 @@ mod tests {
         assert_eq!(app.chat_list.items[0], "Help");
     }
 
+    /// Verifies sent messages are persisted to the store and can be reloaded by conversation ID.
     #[tokio::test]
     async fn send_message_saves_to_store() {
         let (mut app, _tmp) = test_app_with_store();
@@ -1911,6 +1938,7 @@ mod tests {
         assert_eq!(loaded.messages.len(), 1);
     }
 
+    /// Ensures DeleteChat removes the conversation from both memory and the backing store.
     #[tokio::test]
     async fn delete_chat_removes_from_store() {
         let (mut app, _tmp) = test_app_with_store();
@@ -1926,6 +1954,7 @@ mod tests {
         assert!(store.load(id).is_err());
     }
 
+    /// Verifies switching conversations loads the correct messages into the chat view.
     #[tokio::test]
     async fn switch_conversation_loads_messages() {
         let (mut app, _tmp) = test_app_with_store();
@@ -1946,6 +1975,7 @@ mod tests {
         assert_eq!(app.chat_view.messages[0].content, "A");
     }
 
+    /// Ensures Quit persists the active conversation to the store before exiting.
     #[tokio::test]
     async fn quit_saves_active_conversation() {
         let (mut app, _tmp) = test_app_with_store();
@@ -1960,6 +1990,7 @@ mod tests {
         assert_eq!(loaded.messages.len(), 1);
     }
 
+    /// Verifies completed streaming appends the assistant response to the conversation and persists it.
     #[tokio::test]
     async fn finish_streaming_saves_assistant_response() {
         let (mut app, _tmp) = test_app_with_store();
@@ -1999,6 +2030,7 @@ mod tests {
         assert_eq!(loaded.messages.len(), 2);
     }
 
+    /// Ensures an app initialized with a pre-populated store loads existing conversations into the UI.
     #[tokio::test]
     async fn app_loads_existing_conversations_on_init() {
         let tmp = TempDir::new().unwrap();
@@ -2018,6 +2050,7 @@ mod tests {
         assert_eq!(app.conversations.conversation_ids.len(), 1);
     }
 
+    /// Verifies set_active_model updates the conversation's provider/model and the selector widget.
     #[tokio::test]
     async fn set_active_model_updates_conversation() {
         let (mut app, _tmp) = test_app_with_store();
@@ -2036,6 +2069,7 @@ mod tests {
         assert_eq!(app.model_selector.model, "claude");
     }
 
+    /// Ensures switching conversations restores the per-conversation model selection.
     #[tokio::test]
     async fn switch_conversation_restores_model() {
         let (mut app, _tmp) = test_app_with_store();
@@ -2057,6 +2091,7 @@ mod tests {
         assert_eq!(app.config.general.default_model, "gpt-4o");
     }
 
+    /// Verifies set_active_model updates the status bar to show the new provider and model.
     #[tokio::test]
     async fn set_active_model_status_shows_provider_and_model() {
         let mut app = test_app();
@@ -2067,6 +2102,7 @@ mod tests {
 
     // ── Token usage tracking ──
 
+    /// Ensures token usage from stream chunks is tracked in session totals and shown in status.
     #[tokio::test]
     async fn usage_tracked_after_streaming() {
         let mut app = test_app();
@@ -2095,6 +2131,7 @@ mod tests {
         assert!(status.contains("20out"));
     }
 
+    /// Verifies session usage accumulates token counts across multiple streaming requests.
     #[tokio::test]
     async fn session_usage_accumulates_across_requests() {
         let mut app = test_app();
@@ -2130,6 +2167,7 @@ mod tests {
         assert_eq!(app.session_usage.total(), 75);
     }
 
+    /// Ensures split usage events (Anthropic-style: input first, output later) accumulate correctly.
     #[tokio::test]
     async fn partial_usage_accumulates_anthropic_style() {
         let mut app = test_app();
@@ -2155,6 +2193,7 @@ mod tests {
         assert_eq!(app.session_usage.output_tokens, 87);
     }
 
+    /// Ensures streams with no usage data show a plain "ready" status.
     #[tokio::test]
     async fn no_usage_shows_plain_ready() {
         let mut app = test_app();
@@ -2182,6 +2221,7 @@ mod tests {
 
     // ── Context & compaction tests ──
 
+    /// Verifies creating a new conversation resets compaction summary and context usage.
     #[tokio::test]
     async fn new_conversation_clears_compaction_state() {
         let (mut app, _tmp) = test_app_with_store();
@@ -2194,6 +2234,7 @@ mod tests {
         assert!(app.model_selector.context_usage_pct.is_none());
     }
 
+    /// Ensures switching conversations clears the compaction summary from the previous chat.
     #[tokio::test]
     async fn switch_conversation_clears_compaction() {
         let (mut app, _tmp) = test_app_with_store();
@@ -2210,6 +2251,7 @@ mod tests {
         assert!(app.compaction_summary.is_none());
     }
 
+    /// Ensures compacting a conversation shorter than the threshold shows a "too short" status.
     #[tokio::test]
     async fn compact_too_short_shows_message() {
         let (mut app, _tmp) = test_app_with_store();
@@ -2229,6 +2271,7 @@ mod tests {
             .contains("too short"));
     }
 
+    /// Verifies compaction truncates messages to the recent_messages count and produces a summary.
     #[tokio::test]
     async fn compact_reduces_messages() {
         let (mut app, _tmp) = test_app_with_store();
@@ -2251,6 +2294,7 @@ mod tests {
         assert_eq!(conv.messages.len(), 5);
     }
 
+    /// Verifies ":set temperature" updates the config and rejects out-of-range values.
     #[tokio::test]
     async fn set_command_temperature() {
         let mut app = test_app();
@@ -2262,6 +2306,7 @@ mod tests {
         assert_eq!(app.config.general.temperature, Some(0.5));
     }
 
+    /// Verifies ":set compaction" updates the strategy and rejects invalid values.
     #[tokio::test]
     async fn set_command_compaction() {
         let mut app = test_app();
@@ -2273,6 +2318,7 @@ mod tests {
         assert_eq!(app.config.conversation.compaction_strategy, "truncation");
     }
 
+    /// Verifies ":set show_cost" toggles the cost display flag on and off.
     #[tokio::test]
     async fn set_command_show_cost() {
         let mut app = test_app();
@@ -2282,6 +2328,7 @@ mod tests {
         assert!(app.config.usage.show_cost);
     }
 
+    /// Ensures the ":usage" command displays token counts, turn count, and cost in the chat view.
     #[tokio::test]
     async fn usage_command_shows_info() {
         let (mut app, _tmp) = test_app_with_store();
@@ -2303,6 +2350,7 @@ mod tests {
         assert!(last_msg.content.contains("$0.005"));
     }
 
+    /// Verifies the status bar hides cost information when show_cost is disabled.
     #[tokio::test]
     async fn cost_display_respects_show_cost_flag() {
         let mut app = test_app();
@@ -2332,5 +2380,135 @@ mod tests {
         let status = app.status_bar.status_message.as_ref().unwrap();
         assert!(status.contains("10in"));
         assert!(!status.contains("$")); // cost should be hidden
+    }
+
+    /// Ensures the :quit command saves the active conversation and stops the app.
+    #[tokio::test]
+    async fn execute_command_quit() {
+        let (mut app, _tmp) = test_app_with_store();
+        app.create_new_conversation();
+        app.execute_command("quit");
+        assert!(!app.running);
+    }
+
+    /// Ensures the :new command creates a new conversation.
+    #[tokio::test]
+    async fn execute_command_new_chat() {
+        let (mut app, _tmp) = test_app_with_store();
+        app.execute_command("new");
+        assert!(app.conversations.active_conversation.is_some());
+        assert_eq!(app.conversations.conversation_ids.len(), 1);
+    }
+
+    /// Ensures the :clear command empties the chat view and conversation messages.
+    #[tokio::test]
+    async fn execute_command_clear() {
+        let (mut app, _tmp) = test_app_with_store();
+        app.create_new_conversation();
+        app.conversations.add_message(Message::user("test"));
+        app.chat_view.add_message(ChatMessage {
+            role: MessageRole::User,
+            content: "test".to_string(),
+            timestamp: None,
+        });
+
+        app.execute_command("clear");
+
+        assert!(app.chat_view.messages.is_empty());
+        assert!(app.conversations.active_conversation.as_ref().unwrap().messages.is_empty());
+    }
+
+    /// Ensures the :help command toggles the help overlay.
+    #[tokio::test]
+    async fn execute_command_help() {
+        let mut app = test_app();
+        app.execute_command("help");
+        assert!(app.help_overlay.visible);
+    }
+
+    /// Ensures an unknown command sets a status bar error message.
+    #[tokio::test]
+    async fn execute_command_unknown() {
+        let mut app = test_app();
+        app.execute_command("notacommand");
+        let status = app.status_bar.status_message.as_ref().unwrap();
+        assert!(status.contains("Unknown command"));
+    }
+
+    /// Ensures the :model command with an unknown model shows an error status.
+    #[tokio::test]
+    async fn execute_command_model_unknown() {
+        let mut app = test_app();
+        app.execute_command("model nonexistent-model");
+        let status = app.status_bar.status_message.as_ref().unwrap();
+        assert!(status.contains("Unknown model"));
+    }
+
+    /// Ensures the :provider command with an unknown provider shows an error status.
+    #[tokio::test]
+    async fn execute_command_provider_unknown() {
+        let mut app = test_app();
+        app.execute_command("provider nonexistent-provider");
+        let status = app.status_bar.status_message.as_ref().unwrap();
+        assert!(status.contains("Unknown provider"));
+    }
+
+    /// Ensures the :context command with a disabled contexts feature shows a status message.
+    #[tokio::test]
+    async fn execute_command_context_disabled() {
+        let mut app = test_app();
+        app.config.features.contexts = false;
+        app.execute_command("context myctx");
+        let status = app.status_bar.status_message.as_ref().unwrap();
+        assert!(status.contains("disabled"));
+    }
+
+    /// Ensures the :context command without args clears the active context.
+    #[tokio::test]
+    async fn execute_command_context_clear() {
+        let mut app = test_app();
+        app.config.features.contexts = true;
+        app.active_context = Some("test".to_string());
+        app.execute_command("context");
+        assert!(app.active_context.is_none());
+        let status = app.status_bar.status_message.as_ref().unwrap();
+        assert!(status.contains("cleared"));
+    }
+
+    /// Ensures the :usage command without active conversation shows an error.
+    #[tokio::test]
+    async fn execute_command_usage_no_active() {
+        let mut app = test_app();
+        app.execute_command("usage");
+        let status = app.status_bar.status_message.as_ref().unwrap();
+        assert!(status.contains("No active conversation"));
+    }
+
+    /// Ensures the :usage command with an active conversation adds a system message with token stats.
+    #[tokio::test]
+    async fn execute_command_usage_with_active() {
+        let (mut app, _tmp) = test_app_with_store();
+        app.create_new_conversation();
+        app.execute_command("usage");
+        let last = app.chat_view.messages.last().unwrap();
+        assert_eq!(last.role, MessageRole::System);
+        assert!(last.content.contains("Usage:"));
+    }
+
+    /// Ensures the :export command without active conversation shows an error.
+    #[tokio::test]
+    async fn execute_command_export_no_active() {
+        let (mut app, _tmp) = test_app_with_store();
+        app.execute_command("export");
+        let status = app.status_bar.status_message.as_ref().unwrap();
+        assert!(status.contains("No active conversation"));
+    }
+
+    /// Ensures the :delete command with no conversations is a no-op.
+    #[tokio::test]
+    async fn execute_command_delete_empty() {
+        let (mut app, _tmp) = test_app_with_store();
+        app.execute_command("delete");
+        assert!(app.conversations.active_conversation.is_none());
     }
 }

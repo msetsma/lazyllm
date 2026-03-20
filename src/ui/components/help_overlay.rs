@@ -140,12 +140,14 @@ impl Component for HelpOverlay {
 mod tests {
     use super::*;
 
+    /// Ensures the help overlay is hidden by default on creation.
     #[test]
     fn help_overlay_starts_hidden() {
         let help = HelpOverlay::new();
         assert!(!help.visible);
     }
 
+    /// Verifies toggle flips the overlay between visible and hidden.
     #[test]
     fn toggle_flips_visibility() {
         let mut help = HelpOverlay::new();
@@ -155,6 +157,7 @@ mod tests {
         assert!(!help.visible);
     }
 
+    /// Ensures the ToggleHelp action correctly toggles the overlay via handle_action.
     #[test]
     fn handle_action_toggle_help() {
         let mut help = HelpOverlay::new();
@@ -164,6 +167,7 @@ mod tests {
         assert!(!help.visible);
     }
 
+    /// Verifies help_lines produces non-empty output containing keybinding/command info.
     #[test]
     fn help_lines_are_not_empty() {
         let help = HelpOverlay::new();
@@ -172,6 +176,7 @@ mod tests {
         assert!(!lines.is_empty());
     }
 
+    /// Ensures the help text includes key commands like :quit and :model.
     #[test]
     fn help_lines_include_commands() {
         let help = HelpOverlay::new();
@@ -186,6 +191,7 @@ mod tests {
         assert!(content.contains(":model"));
     }
 
+    /// Ensures the centered rectangle calculation fits within the given area bounds.
     #[test]
     fn centered_rect_fits_within_area() {
         let area = Rect::new(0, 0, 100, 50);

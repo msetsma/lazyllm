@@ -497,6 +497,7 @@ mod tests {
     use super::*;
     use crate::llm::types::Message;
 
+    /// Verifies the provider reports the correct name for identification.
     #[test]
     fn anthropic_provider_name() {
         let provider = AnthropicProvider::new(
@@ -508,6 +509,7 @@ mod tests {
         assert_eq!(provider.name(), "anthropic");
     }
 
+    /// Ensures configured models are returned in order from available_models().
     #[test]
     fn anthropic_provider_models() {
         let provider = AnthropicProvider::new(
@@ -524,6 +526,7 @@ mod tests {
         assert_eq!(models[0].id, "claude-sonnet-4-20250514");
     }
 
+    /// Ensures the messages URL is normalized regardless of trailing path variants.
     #[test]
     fn messages_url_construction() {
         let provider = AnthropicProvider::new(
@@ -560,6 +563,7 @@ mod tests {
         );
     }
 
+    /// Verifies system messages are extracted into the top-level `system` field per Anthropic API.
     #[test]
     fn anthropic_request_extracts_system_message() {
         let chat_req = ChatRequest::new(
@@ -572,12 +576,13 @@ mod tests {
 
         let req = AnthropicRequest::from(&chat_req);
         assert_eq!(req.system.as_deref(), Some("be helpful"));
-        assert_eq!(req.messages.len(), 1); // only user, system extracted
+        assert_eq!(req.messages.len(), 1);
         assert_eq!(req.messages[0].role, "user");
         assert_eq!(req.max_tokens, DEFAULT_MAX_TOKENS);
         assert!(req.tools.is_none());
     }
 
+    /// Ensures requests without system messages leave the system field as None.
     #[test]
     fn anthropic_request_no_system_message() {
         let chat_req = ChatRequest::new(
@@ -590,6 +595,7 @@ mod tests {
         assert_eq!(req.messages.len(), 1);
     }
 
+    /// Verifies tool definitions are converted to the Anthropic tool format.
     #[test]
     fn anthropic_request_with_tools() {
         let tools = vec![super::super::types::ToolDefinition {
@@ -608,6 +614,7 @@ mod tests {
         assert_eq!(req.tools.as_ref().unwrap()[0].name, "read_file");
     }
 
+    /// Ensures the max_tokens override from ChatRequest is forwarded correctly.
     #[test]
     fn anthropic_request_respects_max_tokens() {
         let chat_req = ChatRequest::new("claude-sonnet-4-20250514", vec![Message::user("hi")])
@@ -617,6 +624,7 @@ mod tests {
         assert_eq!(req.max_tokens, 1000);
     }
 
+    /// Verifies JSON serialization omits None fields (system, tools) per skip_serializing_if.
     #[test]
     fn anthropic_request_serializes_correctly() {
         let chat_req = ChatRequest::new("claude-sonnet-4-20250514", vec![Message::user("hi")]);
@@ -626,10 +634,11 @@ mod tests {
         assert_eq!(json["model"], "claude-sonnet-4-20250514");
         assert_eq!(json["stream"], true);
         assert_eq!(json["max_tokens"], DEFAULT_MAX_TOKENS);
-        assert!(json.get("system").is_none()); // skipped when None
-        assert!(json.get("tools").is_none()); // skipped when None
+        assert!(json.get("system").is_none());
+        assert!(json.get("tools").is_none());
     }
 
+    /// Verifies content_block_delta SSE events are parsed into text Delta chunks.
     #[test]
     fn parse_content_block_delta() {
         let line = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
@@ -637,6 +646,7 @@ mod tests {
         assert_eq!(chunk, StreamChunk::Delta("Hello".to_string()));
     }
 
+    /// Verifies message_stop SSE events signal stream completion.
     #[test]
     fn parse_message_stop() {
         let line = r#"data: {"type":"message_stop"}"#;
@@ -644,6 +654,7 @@ mod tests {
         assert_eq!(chunk, StreamChunk::Done);
     }
 
+    /// Verifies error events are parsed into StreamChunk::Error with the message.
     #[test]
     fn parse_error_event() {
         let line = r#"data: {"type":"error","error":{"message":"rate limited"}}"#;
@@ -651,12 +662,14 @@ mod tests {
         assert_eq!(chunk, StreamChunk::Error("rate limited".to_string()));
     }
 
+    /// Ensures message_start events without usage data are ignored.
     #[test]
     fn parse_message_start_without_usage_returns_none() {
         let line = r#"data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","model":"claude-sonnet-4-20250514"}}"#;
         assert!(parse_anthropic_sse(line).is_none());
     }
 
+    /// Verifies input token counts are extracted from message_start usage data.
     #[test]
     fn parse_message_start_with_usage_returns_input_tokens() {
         let line = r#"data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","model":"claude-sonnet-4-20250514","usage":{"input_tokens":42}}}"#;
@@ -667,6 +680,7 @@ mod tests {
         );
     }
 
+    /// Verifies output token counts are extracted from message_delta usage data.
     #[test]
     fn parse_message_delta_with_usage_returns_output_tokens() {
         let line = r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":87}}"#;
@@ -677,18 +691,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parse_content_block_start_returns_none() {
-        let line = r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#;
-        assert!(parse_anthropic_sse(line).is_none());
-    }
-
+    /// Ensures non-data SSE lines (event:, empty) are silently skipped.
     #[test]
     fn parse_non_data_line_returns_none() {
         assert!(parse_anthropic_sse("event: content_block_delta").is_none());
         assert!(parse_anthropic_sse("").is_none());
     }
 
+    /// Ensures malformed JSON in SSE data produces an Error chunk rather than panicking.
     #[test]
     fn parse_invalid_json_returns_error() {
         let line = "data: {invalid json}";

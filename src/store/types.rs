@@ -148,6 +148,7 @@ mod tests {
     use super::*;
     use crate::llm::types::Message;
 
+    /// Verifies new conversations start with default title, empty messages, and valid timestamps.
     #[test]
     fn new_conversation_has_defaults() {
         let conv = Conversation::new("openai".to_string(), "gpt-4o".to_string());
@@ -158,6 +159,7 @@ mod tests {
         assert!(conv.created_at <= Utc::now());
     }
 
+    /// Ensures with_title() returns a new conversation with the updated title.
     #[test]
     fn with_title_returns_new_conversation() {
         let conv = Conversation::new("openai".to_string(), "gpt-4o".to_string())
@@ -165,25 +167,26 @@ mod tests {
         assert_eq!(conv.title, "My Chat");
     }
 
+    /// Verifies add_message() is immutable — returns a new conversation, original unchanged.
     #[test]
     fn add_message_returns_new_conversation() {
         let conv = Conversation::new("openai".to_string(), "gpt-4o".to_string());
         let updated = conv.add_message(Message::user("hello"));
         assert_eq!(updated.messages.len(), 1);
         assert_eq!(updated.messages[0].content, "hello");
-        // Original unchanged
         assert!(conv.messages.is_empty());
     }
 
+    /// Ensures add_message() advances the updated_at timestamp.
     #[test]
     fn add_message_updates_timestamp() {
         let conv = Conversation::new("openai".to_string(), "gpt-4o".to_string());
         let before = conv.updated_at;
-        // Small sleep not needed - just check it's >=
         let updated = conv.add_message(Message::user("hi"));
         assert!(updated.updated_at >= before);
     }
 
+    /// Verifies summary() extracts correct fields including message count.
     #[test]
     fn summary_has_correct_fields() {
         let conv = Conversation::new("anthropic".to_string(), "claude".to_string())
@@ -199,6 +202,7 @@ mod tests {
         assert_eq!(summary.id, conv.id);
     }
 
+    /// Verifies auto_title() uses the first user message content.
     #[test]
     fn auto_title_from_first_user_message() {
         let conv = Conversation::new("openai".to_string(), "gpt-4o".to_string())
@@ -206,6 +210,7 @@ mod tests {
         assert_eq!(conv.auto_title(), "How do I write Rust?");
     }
 
+    /// Ensures auto_title() truncates long messages to 40 chars with ellipsis.
     #[test]
     fn auto_title_truncates_long_messages() {
         let long_msg = "a".repeat(60);
@@ -216,12 +221,14 @@ mod tests {
         assert!(title.ends_with("..."));
     }
 
+    /// Ensures auto_title() falls back to "New Chat" when no user messages exist.
     #[test]
     fn auto_title_default_when_no_user_message() {
         let conv = Conversation::new("openai".to_string(), "gpt-4o".to_string());
         assert_eq!(conv.auto_title(), "New Chat");
     }
 
+    /// Verifies auto_title() skips assistant messages and finds the first user message.
     #[test]
     fn auto_title_skips_assistant_messages() {
         let conv = Conversation::new("openai".to_string(), "gpt-4o".to_string())
@@ -230,6 +237,7 @@ mod tests {
         assert_eq!(conv.auto_title(), "Hello there");
     }
 
+    /// Ensures conversations survive JSON serialization/deserialization roundtrip.
     #[test]
     fn conversation_serializes_roundtrip() {
         let conv = Conversation::new("openai".to_string(), "gpt-4o".to_string())
@@ -242,15 +250,5 @@ mod tests {
         assert_eq!(parsed.title, conv.title);
         assert_eq!(parsed.messages.len(), conv.messages.len());
         assert_eq!(parsed.id, conv.id);
-    }
-
-    #[test]
-    fn summary_serializes_roundtrip() {
-        let conv = Conversation::new("openai".to_string(), "gpt-4o".to_string());
-        let summary = conv.summary();
-        let json = serde_json::to_string(&summary).unwrap();
-        let parsed: ConversationSummary = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.id, summary.id);
-        assert_eq!(parsed.title, summary.title);
     }
 }

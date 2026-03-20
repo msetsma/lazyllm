@@ -131,6 +131,7 @@ impl std::error::Error for McpError {}
 mod tests {
     use super::*;
 
+    /// Ensures a JSON-RPC request serializes with correct version, id, method, and no params when omitted.
     #[test]
     fn json_rpc_request_serializes() {
         let req = JsonRpcRequest::new(1, "tools/list", None);
@@ -141,6 +142,7 @@ mod tests {
         assert!(json.get("params").is_none());
     }
 
+    /// Verifies JSON-RPC request params are included in serialized output when provided.
     #[test]
     fn json_rpc_request_with_params() {
         let params = serde_json::json!({"name": "test"});
@@ -149,6 +151,7 @@ mod tests {
         assert_eq!(json["params"]["name"], "test");
     }
 
+    /// Ensures notifications serialize without an id field per JSON-RPC 2.0 spec.
     #[test]
     fn json_rpc_notification_serializes() {
         let notif = JsonRpcNotification::new("notifications/initialized", None);
@@ -158,6 +161,7 @@ mod tests {
         assert!(json.get("id").is_none());
     }
 
+    /// Verifies a successful JSON-RPC response deserializes with result and no error.
     #[test]
     fn json_rpc_response_deserializes() {
         let json = r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}"#;
@@ -167,6 +171,7 @@ mod tests {
         assert!(resp.error.is_none());
     }
 
+    /// Ensures a JSON-RPC error response deserializes with the correct code and message.
     #[test]
     fn json_rpc_error_response_deserializes() {
         let json = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid request"}}"#;
@@ -177,6 +182,7 @@ mod tests {
         assert_eq!(err.message, "Invalid request");
     }
 
+    /// Verifies MCP ToolInfo deserializes name, description, and inputSchema from JSON.
     #[test]
     fn tool_info_deserializes() {
         let json = r#"{"name":"read_file","description":"Read a file","inputSchema":{"type":"object"}}"#;
@@ -186,6 +192,7 @@ mod tests {
         assert!(info.input_schema.is_some());
     }
 
+    /// Ensures ToolCallParams serializes name and arguments for the tools/call RPC method.
     #[test]
     fn tool_call_params_serializes() {
         let params = ToolCallParams {
@@ -197,6 +204,7 @@ mod tests {
         assert_eq!(json["arguments"]["path"], "/tmp/test.txt");
     }
 
+    /// Verifies each McpError variant produces a human-readable Display string.
     #[test]
     fn mcp_error_display() {
         let err = McpError::Transport("connection refused".to_string());

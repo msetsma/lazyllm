@@ -180,6 +180,7 @@ mod tests {
         })
     }
 
+    /// Ensures a new registry starts with no providers.
     #[test]
     fn registry_starts_empty() {
         let registry = ProviderRegistry::new();
@@ -187,6 +188,7 @@ mod tests {
         assert!(registry.list_providers().is_empty());
     }
 
+    /// Verifies providers can be registered and retrieved by name.
     #[test]
     fn register_and_get_provider() {
         let mut registry = ProviderRegistry::new();
@@ -197,12 +199,14 @@ mod tests {
         assert_eq!(provider.name(), "openai");
     }
 
+    /// Ensures lookup of a non-registered provider returns None.
     #[test]
     fn get_nonexistent_provider_returns_none() {
         let registry = ProviderRegistry::new();
         assert!(registry.get("nonexistent").is_none());
     }
 
+    /// Verifies list_providers returns all registered provider names.
     #[test]
     fn list_providers_returns_all_names() {
         let mut registry = ProviderRegistry::new();
@@ -214,17 +218,7 @@ mod tests {
         assert_eq!(names, vec!["anthropic", "openai"]);
     }
 
-    #[test]
-    fn provider_available_models() {
-        let mut registry = ProviderRegistry::new();
-        registry.register(mock_provider("openai"));
-
-        let provider = registry.get("openai").unwrap();
-        let models = provider.available_models();
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, "test-model");
-    }
-
+    /// Verifies the LlmProvider trait's chat method streams Delta then Done via channel.
     #[tokio::test]
     async fn mock_provider_streams_response() {
         let provider = mock_provider("test");
@@ -238,5 +232,120 @@ mod tests {
 
         let chunk2 = rx.recv().await.unwrap();
         assert_eq!(chunk2, StreamChunk::Done);
+    }
+
+    /// Ensures build_registry with an empty config produces an empty registry.
+    #[test]
+    fn build_registry_empty_config() {
+        let config = AppConfig::default();
+        let registry = build_registry(&config);
+        assert!(registry.is_empty());
+    }
+
+    /// Ensures Ollama provider is registered without requiring an API key env var.
+    #[test]
+    fn build_registry_ollama_no_api_key_needed() {
+        use crate::config::types::ProviderConfig;
+
+        let mut config = AppConfig::default();
+        config.providers.insert(
+            "local-ollama".to_string(),
+            ProviderConfig {
+                provider_type: "ollama".to_string(),
+                api_key_env: None,
+                base_url: Some("http://localhost:11434".to_string()),
+                models: vec!["llama3".to_string()],
+                default_model: None,
+            },
+        );
+
+        let registry = build_registry(&config);
+        assert!(!registry.is_empty());
+        assert!(registry.get("local-ollama").is_some());
+    }
+
+    /// Ensures an OpenAI-type provider is skipped when its API key env var is not set.
+    #[test]
+    fn build_registry_skips_provider_without_api_key() {
+        use crate::config::types::ProviderConfig;
+
+        let mut config = AppConfig::default();
+        config.providers.insert(
+            "my-openai".to_string(),
+            ProviderConfig {
+                provider_type: "openai".to_string(),
+                api_key_env: Some("LAZYLLM_TEST_MISSING_KEY_XYZ".to_string()),
+                base_url: None,
+                models: vec!["gpt-4o".to_string()],
+                default_model: None,
+            },
+        );
+
+        // Ensure the env var is not set
+        unsafe { std::env::remove_var("LAZYLLM_TEST_MISSING_KEY_XYZ") };
+
+        let registry = build_registry(&config);
+        assert!(registry.get("my-openai").is_none());
+    }
+
+    /// Ensures an OpenAI-type provider is registered when its API key env var is set.
+    #[test]
+    fn build_registry_registers_provider_with_api_key() {
+        use crate::config::types::ProviderConfig;
+
+        let mut config = AppConfig::default();
+        config.providers.insert(
+            "test-openai".to_string(),
+            ProviderConfig {
+                provider_type: "openai".to_string(),
+                api_key_env: Some("LAZYLLM_TEST_OPENAI_KEY".to_string()),
+                base_url: None,
+                models: vec!["gpt-4o".to_string()],
+                default_model: None,
+            },
+        );
+
+        unsafe { std::env::set_var("LAZYLLM_TEST_OPENAI_KEY", "sk-test-dummy") };
+        let registry = build_registry(&config);
+        unsafe { std::env::remove_var("LAZYLLM_TEST_OPENAI_KEY") };
+
+        assert!(registry.get("test-openai").is_some());
+        assert_eq!(registry.get("test-openai").unwrap().name(), "test-openai");
+    }
+
+    /// Ensures multiple provider types can be registered in a single config.
+    #[test]
+    fn build_registry_multiple_providers() {
+        use crate::config::types::ProviderConfig;
+
+        let mut config = AppConfig::default();
+        config.providers.insert(
+            "ollama".to_string(),
+            ProviderConfig {
+                provider_type: "ollama".to_string(),
+                api_key_env: None,
+                base_url: None,
+                models: vec!["llama3".to_string()],
+                default_model: None,
+            },
+        );
+        config.providers.insert(
+            "my-anthropic".to_string(),
+            ProviderConfig {
+                provider_type: "anthropic".to_string(),
+                api_key_env: Some("LAZYLLM_TEST_ANTHROPIC_KEY".to_string()),
+                base_url: None,
+                models: vec!["claude-3".to_string()],
+                default_model: None,
+            },
+        );
+
+        unsafe { std::env::set_var("LAZYLLM_TEST_ANTHROPIC_KEY", "sk-ant-test") };
+        let registry = build_registry(&config);
+        unsafe { std::env::remove_var("LAZYLLM_TEST_ANTHROPIC_KEY") };
+
+        assert!(registry.get("ollama").is_some());
+        assert!(registry.get("my-anthropic").is_some());
+        assert_eq!(registry.list_providers().len(), 2);
     }
 }

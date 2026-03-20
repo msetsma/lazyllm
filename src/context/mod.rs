@@ -50,6 +50,7 @@ fn load_context_file(path: &Path) -> Result<Context, Box<dyn std::error::Error>>
 mod tests {
     use super::*;
 
+    /// Ensures an empty directory yields no contexts.
     #[test]
     fn load_contexts_from_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
@@ -57,12 +58,14 @@ mod tests {
         assert!(contexts.is_empty());
     }
 
+    /// Ensures a nonexistent directory returns an empty map instead of panicking.
     #[test]
     fn load_contexts_from_nonexistent_dir() {
         let contexts = load_contexts(std::path::Path::new("/nonexistent/path"));
         assert!(contexts.is_empty());
     }
 
+    /// Verifies TOML files are loaded as contexts while non-TOML files are ignored.
     #[test]
     fn load_contexts_finds_toml_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -81,6 +84,7 @@ system_prompt = "You are a test."
         assert_eq!(contexts["test-context"].system_prompt, "You are a test.");
     }
 
+    /// Ensures malformed TOML files are skipped without preventing valid ones from loading.
     #[test]
     fn load_contexts_skips_invalid_toml() {
         let dir = tempfile::tempdir().unwrap();

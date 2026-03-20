@@ -183,6 +183,7 @@ mod tests {
         ModelPopup::new()
     }
 
+    /// Ensures a new popup starts hidden with no entries or selection.
     #[test]
     fn starts_hidden_and_empty() {
         let popup = empty_popup();
@@ -191,6 +192,7 @@ mod tests {
         assert!(popup.selected_entry().is_none());
     }
 
+    /// Verifies opening with an empty provider registry shows the popup but with no entries.
     #[test]
     fn open_with_empty_registry() {
         let mut popup = empty_popup();
@@ -201,6 +203,7 @@ mod tests {
         assert!(popup.selected_entry().is_none());
     }
 
+    /// Ensures close sets visibility to false.
     #[test]
     fn close_hides_popup() {
         let mut popup = empty_popup();
@@ -209,6 +212,7 @@ mod tests {
         assert!(!popup.visible);
     }
 
+    /// Verifies select_next advances through entries and wraps back to the first.
     #[test]
     fn select_next_wraps_around() {
         let mut popup = ModelPopup {
@@ -234,6 +238,7 @@ mod tests {
         assert_eq!(popup.list_state.selected(), Some(0)); // wrap
     }
 
+    /// Verifies select_prev wraps to the last entry when moving before the first.
     #[test]
     fn select_prev_wraps_around() {
         let mut popup = ModelPopup {
@@ -256,6 +261,7 @@ mod tests {
         assert_eq!(popup.list_state.selected(), Some(0));
     }
 
+    /// Ensures selecting next/prev on an empty popup is a no-op.
     #[test]
     fn select_on_empty_does_nothing() {
         let mut popup = empty_popup();
@@ -264,6 +270,7 @@ mod tests {
         assert!(popup.selected_entry().is_none());
     }
 
+    /// Verifies selected_entry returns the (provider, model) tuple at the current selection index.
     #[test]
     fn selected_entry_returns_current() {
         let popup = ModelPopup {
@@ -284,6 +291,7 @@ mod tests {
         assert_eq!(entry, ("anthropic".to_string(), "claude-sonnet-4-20250514".to_string()));
     }
 
+    /// Ensures ScrollDown action advances the popup selection.
     #[test]
     fn handle_action_scroll_down() {
         let mut popup = ModelPopup {
@@ -301,6 +309,7 @@ mod tests {
         assert_eq!(popup.list_state.selected(), Some(1));
     }
 
+    /// Ensures ScrollUp action moves the popup selection backwards.
     #[test]
     fn handle_action_scroll_up() {
         let mut popup = ModelPopup {
@@ -318,6 +327,7 @@ mod tests {
         assert_eq!(popup.list_state.selected(), Some(0));
     }
 
+    /// Verifies SelectItem action returns a SelectModel action to trigger model switching.
     #[test]
     fn handle_action_select_item_returns_select_model() {
         let mut popup = ModelPopup {
@@ -334,6 +344,7 @@ mod tests {
         assert_eq!(result, Some(Action::SelectModel));
     }
 
+    /// Ensures ToggleModelSelector closes the popup when it's open.
     #[test]
     fn handle_action_toggle_closes() {
         let mut popup = ModelPopup {
@@ -346,6 +357,7 @@ mod tests {
         assert!(!popup.visible);
     }
 
+    /// Verifies the popup tracks the currently active provider/model for visual marking.
     #[test]
     fn active_entry_marked_in_render_label() {
         let popup = ModelPopup {
@@ -368,6 +380,7 @@ mod tests {
         );
     }
 
+    /// Ensures opening the popup pre-selects the currently active model in the list.
     #[test]
     fn open_preselects_active_model() {
         use crate::llm::types::ModelInfo;

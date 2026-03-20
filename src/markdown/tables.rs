@@ -215,6 +215,7 @@ fn align_cell(content: &str, width: usize, alignment: Alignment) -> String {
 mod tests {
     use super::*;
 
+    /// Ensures a standard markdown table renders with box-drawing characters and cell content.
     #[test]
     fn basic_table() {
         let input = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |";
@@ -226,12 +227,14 @@ mod tests {
         assert!(result.contains("Bob"));
     }
 
+    /// Verifies text without table syntax passes through unchanged.
     #[test]
     fn no_table_passthrough() {
         let input = "Just some text\nwith multiple lines";
         assert_eq!(convert_tables(input), input);
     }
 
+    /// Ensures tables with alignment markers (:---:, ---:, :---) render all cell content.
     #[test]
     fn table_with_alignment() {
         let input = "| Left | Center | Right |\n|:-----|:------:|------:|\n| a | b | c |";
@@ -241,6 +244,7 @@ mod tests {
         assert!(result.contains("Right"));
     }
 
+    /// Verifies a table embedded in surrounding text preserves both the table and surrounding content.
     #[test]
     fn table_surrounded_by_text() {
         let input = "Before table\n\n| H1 | H2 |\n|----|----|\n| a | b |\n\nAfter table";
@@ -250,6 +254,7 @@ mod tests {
         assert!(result.contains('┌'));
     }
 
+    /// Ensures separator row detection correctly identifies --- patterns and rejects data rows.
     #[test]
     fn is_separator_row_detection() {
         assert!(is_separator_row("|---|---|"));
@@ -259,18 +264,21 @@ mod tests {
         assert!(!is_separator_row("no pipes here"));
     }
 
+    /// Verifies parse_cells splits pipe-delimited rows into trimmed cell values.
     #[test]
     fn parse_cells_basic() {
         let cells = parse_cells("| Name | Age | City |");
         assert_eq!(cells, vec!["Name", "Age", "City"]);
     }
 
+    /// Ensures parse_cells handles rows without leading/trailing pipes.
     #[test]
     fn parse_cells_no_outer_pipes() {
         let cells = parse_cells("Name | Age");
         assert_eq!(cells, vec!["Name", "Age"]);
     }
 
+    /// Verifies a table with only a header and separator (no data rows) still renders.
     #[test]
     fn header_only_table() {
         // header + separator with no data rows should still render
@@ -280,6 +288,7 @@ mod tests {
         assert!(result.contains("Col1"));
     }
 
+    /// Ensures parse_alignments correctly identifies Center, Right, and Left alignment markers.
     #[test]
     fn alignment_parsing() {
         let aligns = parse_alignments("|:---:|---:|:---|");
@@ -288,6 +297,7 @@ mod tests {
         assert!(matches!(aligns[2], Alignment::Left));
     }
 
+    /// Verifies single-column tables render correctly with box-drawing borders.
     #[test]
     fn single_column_table() {
         let input = "| Item |\n|------|\n| one |\n| two |";

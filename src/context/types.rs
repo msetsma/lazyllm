@@ -68,6 +68,7 @@ fn expand_tilde(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
+    /// Verifies a full Context with files deserializes correctly from TOML.
     #[test]
     fn context_deserializes_from_toml() {
         let toml_str = r#"
@@ -87,6 +88,7 @@ label = "README"
         assert_eq!(ctx.files[0].label, "README");
     }
 
+    /// Verifies a minimal Context (name only) deserializes with empty defaults.
     #[test]
     fn context_minimal_toml() {
         let toml_str = r#"name = "minimal""#;
@@ -97,6 +99,7 @@ label = "README"
         assert!(ctx.files.is_empty());
     }
 
+    /// Ensures build_messages returns a single system message with the prompt content.
     #[test]
     fn build_messages_returns_system_message() {
         let ctx = Context {
@@ -111,6 +114,7 @@ label = "README"
         assert_eq!(msgs[0].content, "You are helpful.");
     }
 
+    /// Ensures a missing file produces a MISSING warning in the system message.
     #[test]
     fn build_messages_includes_missing_file_warning() {
         let ctx = Context {
@@ -127,6 +131,7 @@ label = "README"
         assert!(msgs[0].content.contains("Missing File"));
     }
 
+    /// Verifies build_messages reads an existing file and includes its contents.
     #[test]
     fn build_messages_reads_real_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -147,6 +152,7 @@ label = "README"
         assert!(msgs[0].content.contains("Test File"));
     }
 
+    /// Verifies tilde prefix is expanded to the home directory.
     #[test]
     fn expand_tilde_expands_home() {
         let path = PathBuf::from("~/some/file.txt");
@@ -155,6 +161,7 @@ label = "README"
         assert!(expanded.ends_with("some/file.txt"));
     }
 
+    /// Ensures absolute paths pass through expand_tilde unchanged.
     #[test]
     fn expand_tilde_leaves_absolute_paths() {
         let path = PathBuf::from("/absolute/path.txt");
@@ -162,6 +169,7 @@ label = "README"
         assert_eq!(expanded, path);
     }
 
+    /// Verifies Context survives a TOML serialize/deserialize roundtrip.
     #[test]
     fn context_serializes_roundtrip() {
         let ctx = Context {

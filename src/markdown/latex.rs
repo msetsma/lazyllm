@@ -397,12 +397,14 @@ fn to_subscript(c: char) -> char {
 mod tests {
     use super::*;
 
+    /// Ensures Greek letter LaTeX commands (e.g. \alpha, \Sigma) convert to Unicode.
     #[test]
     fn greek_letters() {
         assert_eq!(convert_latex("$\\alpha + \\beta$"), "α + β");
         assert_eq!(convert_latex("$\\Sigma$"), "Σ");
     }
 
+    /// Verifies single-char and braced subscript/superscript notation converts to Unicode.
     #[test]
     fn subscripts_and_superscripts() {
         assert_eq!(convert_latex("$x^2$"), "x²");
@@ -411,6 +413,7 @@ mod tests {
         assert_eq!(convert_latex("$a_{ij}$"), "aᵢⱼ");
     }
 
+    /// Ensures math operators (\sum, \int, \infty, \partial) convert to Unicode symbols.
     #[test]
     fn operators() {
         assert_eq!(convert_latex("$\\sum$"), "∑");
@@ -419,6 +422,7 @@ mod tests {
         assert_eq!(convert_latex("$\\partial$"), "∂");
     }
 
+    /// Verifies relational operators (\leq, \neq, \approx, \in) convert to Unicode.
     #[test]
     fn relations() {
         assert_eq!(convert_latex("$a \\leq b$"), "a ≤ b");
@@ -427,6 +431,7 @@ mod tests {
         assert_eq!(convert_latex("$x \\in S$"), "x ∈ S");
     }
 
+    /// Ensures arrow commands (\to, \implies, \iff) convert to Unicode arrows.
     #[test]
     fn arrows() {
         assert_eq!(convert_latex("$a \\to b$"), "a → b");
@@ -434,12 +439,14 @@ mod tests {
         assert_eq!(convert_latex("$A \\iff B$"), "A ⇔ B");
     }
 
+    /// Verifies display math ($$...$$) is converted with surrounding text preserved.
     #[test]
     fn display_math() {
         let result = convert_latex("text $$x^2 + y^2$$ more");
         assert!(result.contains("x² + y²"));
     }
 
+    /// Ensures complex expressions with limits (\sum_{i=1}^{n} x_i) render all parts.
     #[test]
     fn sum_with_limits() {
         let result = convert_latex("$\\sum_{i=1}^{n} x_i$");
@@ -449,24 +456,28 @@ mod tests {
         assert!(result.contains("xᵢ"));
     }
 
+    /// Ensures text without dollar signs passes through unconverted.
     #[test]
     fn no_conversion_outside_dollars() {
         assert_eq!(convert_latex("plain text"), "plain text");
         assert_eq!(convert_latex("no math here"), "no math here");
     }
 
+    /// Verifies dollar amounts (e.g. $100) are not treated as math mode.
     #[test]
     fn preserves_currency() {
         // Dollar amounts should not be converted
         assert_eq!(convert_latex("costs $100"), "costs $100");
     }
 
+    /// Ensures trigonometric functions (\sin, \cos) render as plain text names.
     #[test]
     fn trig_functions() {
         assert_eq!(convert_latex("$\\sin(x)$"), "sin(x)");
         assert_eq!(convert_latex("$\\cos(\\theta)$"), "cos(θ)");
     }
 
+    /// Verifies inline math converts while surrounding prose is preserved.
     #[test]
     fn mixed_text_and_math() {
         let input = "The equation $E = mc^2$ is famous.";
@@ -476,11 +487,13 @@ mod tests {
         assert!(result.contains("is famous."));
     }
 
+    /// Ensures logic quantifiers (\forall, \exists) convert to Unicode.
     #[test]
     fn logic_symbols() {
         assert_eq!(convert_latex("$\\forall x \\exists y$"), "∀ x ∃ y");
     }
 
+    /// Verifies set operation commands (\cup, \cap, \emptyset) convert to Unicode.
     #[test]
     fn set_operations() {
         assert_eq!(convert_latex("$A \\cup B$"), "A ∪ B");
@@ -488,11 +501,13 @@ mod tests {
         assert_eq!(convert_latex("$\\emptyset$"), "∅");
     }
 
+    /// Ensures \sqrt{x} converts to the √ symbol followed by the argument.
     #[test]
     fn sqrt_symbol() {
         assert_eq!(convert_latex("$\\sqrt{x}$"), "√x");
     }
 
+    /// Verifies miscellaneous symbols (\times, \cdot, \pm) convert to Unicode.
     #[test]
     fn misc_symbols() {
         assert_eq!(convert_latex("$a \\times b$"), "a × b");
@@ -500,6 +515,7 @@ mod tests {
         assert_eq!(convert_latex("$a \\pm b$"), "a ± b");
     }
 
+    /// Ensures unmatched dollar signs pass through without conversion.
     #[test]
     fn escaped_dollar_passthrough() {
         // Unmatched $ should pass through

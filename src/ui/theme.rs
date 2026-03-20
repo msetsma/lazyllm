@@ -302,6 +302,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Ensures named colors like "red", "cyan", and "dark_gray" parse to correct Color values.
     #[test]
     fn parse_named_colors() {
         assert_eq!(parse_color("red"), Some(Color::Red));
@@ -311,6 +312,7 @@ mod tests {
         assert_eq!(parse_color("reset"), Some(Color::Reset));
     }
 
+    /// Verifies 3-digit and 6-digit hex color strings parse to correct RGB values.
     #[test]
     fn parse_hex_colors() {
         assert_eq!(parse_color("#ff0000"), Some(Color::Rgb(255, 0, 0)));
@@ -319,12 +321,14 @@ mod tests {
         assert_eq!(parse_color("#f00"), Some(Color::Rgb(255, 0, 0)));
     }
 
+    /// Verifies numeric strings "0" and "255" parse to 256-color indexed values.
     #[test]
     fn parse_indexed_colors() {
         assert_eq!(parse_color("0"), Some(Color::Indexed(0)));
         assert_eq!(parse_color("255"), Some(Color::Indexed(255)));
     }
 
+    /// Ensures invalid color strings like unknown names and malformed hex return None.
     #[test]
     fn parse_invalid_returns_none() {
         assert_eq!(parse_color("not_a_color"), None);
@@ -332,6 +336,7 @@ mod tests {
         assert_eq!(parse_color("#1234"), None);
     }
 
+    /// Verifies color parsing is case-insensitive for both named and hex colors.
     #[test]
     fn parse_case_insensitive() {
         assert_eq!(parse_color("RED"), Some(Color::Red));
@@ -339,6 +344,7 @@ mod tests {
         assert_eq!(parse_color("#FF0000"), Some(Color::Rgb(255, 0, 0)));
     }
 
+    /// Verifies the default theme has cyan focused borders, dark gray unfocused, and correct role colors.
     #[test]
     fn default_theme_values() {
         let theme = Theme::default();
@@ -348,6 +354,7 @@ mod tests {
         assert_eq!(theme.assistant_label, Color::Blue);
     }
 
+    /// Ensures an empty ThemeConfig resolves to default theme values.
     #[test]
     fn theme_config_resolve_uses_defaults() {
         let config = ThemeConfig::default();
@@ -355,6 +362,7 @@ mod tests {
         assert_eq!(theme.border_focused, Color::Cyan);
     }
 
+    /// Verifies ThemeConfig overrides only the specified color while keeping other defaults.
     #[test]
     fn theme_config_resolve_overrides() {
         let config = ThemeConfig {
@@ -366,6 +374,7 @@ mod tests {
         assert_eq!(theme.border_unfocused, Color::DarkGray); // untouched
     }
 
+    /// Ensures an invalid color string in ThemeConfig falls back to the default color.
     #[test]
     fn theme_config_invalid_color_falls_back() {
         let config = ThemeConfig {
@@ -376,24 +385,28 @@ mod tests {
         assert_eq!(theme.border_focused, Color::Cyan); // default
     }
 
+    /// Ensures load_theme("default") returns the default theme.
     #[test]
     fn load_theme_default_returns_default() {
         let theme = load_theme("default");
         assert_eq!(theme.border_focused, Color::Cyan);
     }
 
+    /// Ensures load_theme("") returns the default theme.
     #[test]
     fn load_theme_empty_returns_default() {
         let theme = load_theme("");
         assert_eq!(theme.border_focused, Color::Cyan);
     }
 
+    /// Ensures a non-existent theme name gracefully falls back to the default theme.
     #[test]
     fn load_theme_missing_returns_default() {
         let theme = load_theme("nonexistent_theme_xyz");
         assert_eq!(theme.border_focused, Color::Cyan);
     }
 
+    /// Verifies a theme file with partial overrides applies them while keeping other defaults.
     #[test]
     fn load_theme_file_partial() {
         let tmp = TempDir::new().unwrap();
@@ -413,6 +426,7 @@ user_label = "magenta"
         assert_eq!(theme.border_unfocused, Color::DarkGray); // default
     }
 
+    /// Ensures an invalid TOML theme file falls back to the default theme without panicking.
     #[test]
     fn load_theme_file_invalid_toml_returns_default() {
         let tmp = TempDir::new().unwrap();
@@ -423,6 +437,7 @@ user_label = "magenta"
         assert_eq!(theme.border_focused, Color::Cyan);
     }
 
+    /// Ensures ThemeConfig survives a TOML serialize/deserialize roundtrip.
     #[test]
     fn theme_config_roundtrip_toml() {
         let config = ThemeConfig {

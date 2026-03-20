@@ -376,6 +376,7 @@ mod tests {
         }
     }
 
+    /// Ensures a new chat view starts with no messages, zero scroll, and timestamps off.
     #[test]
     fn new_chat_view_is_empty() {
         let view = ChatView::new();
@@ -384,6 +385,7 @@ mod tests {
         assert!(!view.show_timestamps);
     }
 
+    /// Verifies add_message appends a message and preserves its content.
     #[test]
     fn add_message_mutates_in_place() {
         let mut view = ChatView::new();
@@ -392,6 +394,7 @@ mod tests {
         assert_eq!(view.messages[0].content, "Hello");
     }
 
+    /// Ensures append_to_last concatenates text to the last message's content.
     #[test]
     fn append_to_last_extends_last_message() {
         let mut view = ChatView::new();
@@ -400,6 +403,7 @@ mod tests {
         assert_eq!(view.messages[0].content, "Hello world");
     }
 
+    /// Ensures append_to_last on an empty view is a no-op without panicking.
     #[test]
     fn append_to_last_on_empty_is_noop() {
         let mut view = ChatView::new();
@@ -407,6 +411,7 @@ mod tests {
         assert!(view.messages.is_empty());
     }
 
+    /// Verifies clear removes all messages from the view.
     #[test]
     fn clear_removes_all_messages() {
         let mut view = ChatView::new();
@@ -415,6 +420,7 @@ mod tests {
         assert!(view.messages.is_empty());
     }
 
+    /// Ensures scroll_up increments the scroll offset each time.
     #[test]
     fn scroll_up_increments_offset() {
         let mut view = ChatView::new();
@@ -424,6 +430,7 @@ mod tests {
         assert_eq!(view.scroll_offset, 2);
     }
 
+    /// Ensures scroll_down decrements the scroll offset.
     #[test]
     fn scroll_down_decrements_offset() {
         let mut view = ChatView::new();
@@ -432,6 +439,7 @@ mod tests {
         assert_eq!(view.scroll_offset, 2);
     }
 
+    /// Ensures scroll_down clamps at zero and does not underflow.
     #[test]
     fn scroll_down_does_not_go_below_zero() {
         let mut view = ChatView::new();
@@ -439,6 +447,7 @@ mod tests {
         assert_eq!(view.scroll_offset, 0);
     }
 
+    /// Verifies build_lines renders "You:" and "Assistant:" role labels with message content.
     #[test]
     fn build_lines_includes_role_labels() {
         let theme = test_theme();
@@ -459,6 +468,7 @@ mod tests {
         assert!(content.contains("Hi there"));
     }
 
+    /// Ensures assistant messages are rendered with markdown styling (e.g. bold).
     #[test]
     fn build_lines_renders_assistant_markdown() {
         let theme = test_theme();
@@ -475,6 +485,7 @@ mod tests {
         assert!(has_bold, "Expected bold styling from markdown rendering");
     }
 
+    /// Ensures user messages are rendered as plain text without markdown processing.
     #[test]
     fn build_lines_renders_user_as_plain_text() {
         let theme = test_theme();
@@ -490,6 +501,7 @@ mod tests {
         assert!(content.contains("**not bold**"));
     }
 
+    /// Verifies fenced code blocks in assistant messages render their content.
     #[test]
     fn build_lines_renders_code_blocks() {
         let theme = test_theme();
@@ -511,6 +523,7 @@ mod tests {
         );
     }
 
+    /// Ensures horizontal separator lines (─) appear between messages.
     #[test]
     fn build_lines_has_separators() {
         let theme = test_theme();
@@ -527,6 +540,7 @@ mod tests {
         assert!(has_separator, "Expected separator between messages");
     }
 
+    /// Verifies handle_action dispatches ScrollUp/ScrollDown to the scroll methods.
     #[test]
     fn handle_action_scrolls() {
         let mut view = ChatView::new();
@@ -536,6 +550,7 @@ mod tests {
         assert_eq!(view.scroll_offset, 0);
     }
 
+    /// Ensures multiline message content renders all lines in the output.
     #[test]
     fn multiline_content_renders() {
         let theme = test_theme();
@@ -553,6 +568,7 @@ mod tests {
         assert!(content.contains("line3"));
     }
 
+    /// Verifies timestamps appear in rendered output when show_timestamps is enabled.
     #[test]
     fn timestamps_shown_when_enabled() {
         let theme = test_theme();
@@ -581,6 +597,7 @@ mod tests {
         );
     }
 
+    /// Ensures timestamps do not appear in rendered output by default.
     #[test]
     fn timestamps_hidden_by_default() {
         let theme = test_theme();
@@ -607,6 +624,7 @@ mod tests {
         );
     }
 
+    /// Verifies set_show_timestamps mutates the flag from false to true.
     #[test]
     fn set_show_timestamps_updates_flag() {
         let mut view = ChatView::new();
@@ -615,6 +633,7 @@ mod tests {
         assert!(view.show_timestamps);
     }
 
+    /// Ensures search finds matches across messages regardless of case.
     #[test]
     fn search_finds_matches_case_insensitive() {
         let mut view = ChatView::new();
@@ -624,6 +643,7 @@ mod tests {
         assert_eq!(view.search_matches.len(), 2);
     }
 
+    /// Ensures a search query with no results produces empty matches and no status.
     #[test]
     fn search_no_matches() {
         let mut view = ChatView::new();
@@ -633,6 +653,7 @@ mod tests {
         assert!(view.search_status().is_none());
     }
 
+    /// Verifies search_next cycles through matches and wraps back to the first.
     #[test]
     fn search_next_cycles() {
         let mut view = ChatView::new();
@@ -646,6 +667,7 @@ mod tests {
         assert_eq!(view.search_next(), Some((1, 3))); // wraps
     }
 
+    /// Verifies search_prev wraps to the last match when moving before the first.
     #[test]
     fn search_prev_cycles() {
         let mut view = ChatView::new();
@@ -655,6 +677,7 @@ mod tests {
         assert_eq!(view.search_prev(), Some((1, 2)));
     }
 
+    /// Ensures clear_search empties the query and match list.
     #[test]
     fn clear_search_resets_state() {
         let mut view = ChatView::new();
@@ -666,6 +689,7 @@ mod tests {
         assert!(view.search_matches.is_empty());
     }
 
+    /// Verifies search detects multiple occurrences within a single message with correct byte offsets.
     #[test]
     fn search_multiple_matches_per_message() {
         let mut view = ChatView::new();
@@ -677,6 +701,7 @@ mod tests {
         assert_eq!(view.search_matches[2].byte_offset, 6);
     }
 
+    /// Ensures search tracks correct message indices when matches span multiple messages.
     #[test]
     fn search_across_multiple_messages() {
         let mut view = ChatView::new();

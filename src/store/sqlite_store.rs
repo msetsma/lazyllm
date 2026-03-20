@@ -600,12 +600,14 @@ mod tests {
             .add_message(Message::assistant("hi there"))
     }
 
+    /// Ensures the SQLite database file is created on store initialization.
     #[test]
     fn new_creates_database_file() {
         let (store, _tmp) = test_store();
         assert!(store.db_path().exists());
     }
 
+    /// Verifies conversations survive SQLite save/load roundtrip with all fields intact.
     #[test]
     fn save_and_load_roundtrip() {
         let (store, _tmp) = test_store();
@@ -626,6 +628,7 @@ mod tests {
         }
     }
 
+    /// Ensures saving the same conversation ID replaces messages with updated content.
     #[test]
     fn save_overwrites_existing() {
         let (store, _tmp) = test_store();
@@ -639,6 +642,7 @@ mod tests {
         assert_eq!(loaded.messages.len(), 3);
     }
 
+    /// Ensures loading a non-existent conversation returns an error.
     #[test]
     fn load_nonexistent_returns_error() {
         let (store, _tmp) = test_store();
@@ -646,6 +650,7 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// Verifies delete removes the conversation from the database.
     #[test]
     fn delete_removes_conversation() {
         let (store, _tmp) = test_store();
@@ -657,6 +662,7 @@ mod tests {
         assert!(store.load(id).is_err());
     }
 
+    /// Ensures deleting a non-existent conversation is a no-op.
     #[test]
     fn delete_nonexistent_is_ok() {
         let (store, _tmp) = test_store();
@@ -664,6 +670,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// Verifies list() returns summaries for all saved conversations.
     #[test]
     fn list_returns_all_conversations() {
         let (store, _tmp) = test_store();
@@ -680,6 +687,7 @@ mod tests {
         assert_eq!(summaries.len(), 2);
     }
 
+    /// Ensures list() returns empty vec for a fresh database.
     #[test]
     fn list_empty_store() {
         let (store, _tmp) = test_store();
@@ -687,6 +695,7 @@ mod tests {
         assert!(summaries.is_empty());
     }
 
+    /// Verifies list() returns conversations sorted by updated_at descending.
     #[test]
     fn list_sorted_by_updated_at_desc() {
         let (store, _tmp) = test_store();
@@ -705,16 +714,18 @@ mod tests {
         assert!(summaries[0].updated_at >= summaries[1].updated_at);
     }
 
+    /// Verifies the summary message_count matches actual stored messages.
     #[test]
     fn summary_has_correct_message_count() {
         let (store, _tmp) = test_store();
-        let conv = sample_conversation(); // 2 messages
+        let conv = sample_conversation();
         store.save(&conv).unwrap();
 
         let summaries = store.list().unwrap();
         assert_eq!(summaries[0].message_count, 2);
     }
 
+    /// Ensures tool_use and tool_result messages with metadata survive SQLite roundtrip.
     #[test]
     fn tool_calls_roundtrip() {
         let (store, _tmp) = test_store();
@@ -738,7 +749,6 @@ mod tests {
 
         assert_eq!(loaded.messages.len(), 4);
 
-        // Check tool_use message
         let tool_msg = &loaded.messages[1];
         assert_eq!(tool_msg.role, Role::Assistant);
         let tc = tool_msg.tool_calls.as_ref().unwrap();
@@ -746,13 +756,13 @@ mod tests {
         assert_eq!(tc[0].id, "tc_1");
         assert_eq!(tc[0].name, "read_file");
 
-        // Check tool_result message
         let result_msg = &loaded.messages[2];
         assert_eq!(result_msg.role, Role::Tool);
         assert_eq!(result_msg.tool_call_id.as_deref(), Some("tc_1"));
         assert_eq!(result_msg.content, "file contents");
     }
 
+    /// Verifies the optional context_name field persists through SQLite roundtrip.
     #[test]
     fn context_name_roundtrip() {
         let (store, _tmp) = test_store();
@@ -765,20 +775,20 @@ mod tests {
         assert_eq!(loaded.context_name, Some("coding".to_string()));
     }
 
+    /// Ensures running migrations multiple times is safe and does not corrupt data.
     #[test]
     fn migration_is_idempotent() {
         let (store, _tmp) = test_store();
 
-        // Run migrations again — should not fail
         store.run_migrations().unwrap();
 
-        // Store should still work
         let conv = sample_conversation();
         store.save(&conv).unwrap();
         let loaded = store.load(conv.id).unwrap();
         assert_eq!(loaded.title, conv.title);
     }
 
+    /// Verifies token usage and cost fields persist through SQLite roundtrip.
     #[test]
     fn usage_fields_roundtrip() {
         let (store, _tmp) = test_store();
@@ -801,6 +811,7 @@ mod tests {
         assert_eq!(loaded.context_estimate, 4096);
     }
 
+    /// Ensures usage fields are included in list() summaries.
     #[test]
     fn list_includes_usage_fields() {
         let (store, _tmp) = test_store();
@@ -816,6 +827,7 @@ mod tests {
         assert_eq!(summaries[0].turn_count, 5);
     }
 
+    /// Verifies append_message adds a message and atomically updates usage totals.
     #[test]
     fn append_message_adds_message_and_updates_totals() {
         let (store, _tmp) = test_store();
@@ -843,6 +855,7 @@ mod tests {
         assert_eq!(loaded.turn_count, 1);
     }
 
+    /// Ensures append_message works without usage data (totals stay at zero).
     #[test]
     fn append_message_without_usage() {
         let (store, _tmp) = test_store();
@@ -859,6 +872,7 @@ mod tests {
         assert_eq!(loaded.turn_count, 1);
     }
 
+    /// Verifies multiple append_message calls accumulate token totals correctly.
     #[test]
     fn append_message_accumulates_totals() {
         let (store, _tmp) = test_store();
@@ -886,6 +900,7 @@ mod tests {
         assert_eq!(loaded.turn_count, 2);
     }
 
+    /// Ensures tool_calls metadata is preserved when appending via append_message.
     #[test]
     fn append_message_preserves_tool_metadata() {
         let (store, _tmp) = test_store();
@@ -906,6 +921,7 @@ mod tests {
         assert_eq!(tc[0].id, "tc_1");
     }
 
+    /// Verifies checkpoints can be saved and loaded with reason and message snapshot.
     #[test]
     fn checkpoint_save_and_load() {
         let (store, _tmp) = test_store();
@@ -926,6 +942,7 @@ mod tests {
         assert_eq!(restored.len(), 2);
     }
 
+    /// Ensures loading checkpoints for a non-existent conversation returns empty.
     #[test]
     fn checkpoint_load_empty() {
         let (store, _tmp) = test_store();
@@ -933,6 +950,7 @@ mod tests {
         assert!(checkpoints.is_empty());
     }
 
+    /// Verifies prune_checkpoints keeps only the N newest checkpoints.
     #[test]
     fn prune_checkpoints_keeps_newest() {
         let (store, _tmp) = test_store();
@@ -948,11 +966,11 @@ mod tests {
         store.prune_checkpoints(conv.id, 2).unwrap();
         let checkpoints = store.load_checkpoints(conv.id).unwrap();
         assert_eq!(checkpoints.len(), 2);
-        // Should keep the newest (last two created)
         assert_eq!(checkpoints[0].reason.as_deref(), Some("cp 3"));
         assert_eq!(checkpoints[1].reason.as_deref(), Some("cp 4"));
     }
 
+    /// Ensures checkpoints are cascade-deleted when the parent conversation is deleted.
     #[test]
     fn checkpoint_deleted_with_conversation() {
         let (store, _tmp) = test_store();
@@ -967,6 +985,7 @@ mod tests {
         assert!(checkpoints.is_empty());
     }
 
+    /// Verifies export/import creates a new conversation with a different ID but same content.
     #[test]
     fn export_and_import_roundtrip() {
         let (store, _tmp) = test_store();
@@ -976,22 +995,22 @@ mod tests {
         let json = store.export_conversation(conv.id).unwrap();
         let new_id = store.import_conversation(&json).unwrap();
 
-        // Should have a different ID
         assert_ne!(new_id, conv.id);
 
-        // But same content
         let imported = store.load(new_id).unwrap();
         assert_eq!(imported.title, conv.title);
         assert_eq!(imported.messages.len(), conv.messages.len());
         assert_eq!(imported.model, conv.model);
     }
 
+    /// Ensures exporting a non-existent conversation returns an error.
     #[test]
     fn export_nonexistent_returns_error() {
         let (store, _tmp) = test_store();
         assert!(store.export_conversation(Uuid::new_v4()).is_err());
     }
 
+    /// Ensures importing invalid JSON returns an error.
     #[test]
     fn import_invalid_json_returns_error() {
         let (store, _tmp) = test_store();

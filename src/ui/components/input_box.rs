@@ -123,6 +123,7 @@ impl Component for InputBox {
 mod tests {
     use super::*;
 
+    /// Ensures a new input box starts with empty content, cursor at 0, and Normal mode.
     #[test]
     fn new_input_box_is_empty() {
         let input = InputBox::new();
@@ -131,6 +132,7 @@ mod tests {
         assert_eq!(input.mode, Mode::Normal);
     }
 
+    /// Verifies inserting a character appends to content and advances the cursor.
     #[test]
     fn insert_char_mutates_in_place() {
         let mut input = InputBox::new();
@@ -139,6 +141,7 @@ mod tests {
         assert_eq!(input.cursor_pos, 1);
     }
 
+    /// Ensures multiple character insertions build up the content and cursor correctly.
     #[test]
     fn insert_multiple_chars() {
         let mut input = InputBox::new();
@@ -148,6 +151,7 @@ mod tests {
         assert_eq!(input.cursor_pos, 2);
     }
 
+    /// Verifies delete_char removes the last character and decrements the cursor.
     #[test]
     fn delete_char_removes_last() {
         let mut input = InputBox::new();
@@ -158,6 +162,7 @@ mod tests {
         assert_eq!(input.cursor_pos, 1);
     }
 
+    /// Ensures delete_char on empty content is a no-op without panicking.
     #[test]
     fn delete_char_at_start_does_nothing() {
         let mut input = InputBox::new();
@@ -166,6 +171,7 @@ mod tests {
         assert_eq!(input.cursor_pos, 0);
     }
 
+    /// Verifies take_content extracts the content, clears it, and resets the cursor.
     #[test]
     fn take_content_clears_and_returns() {
         let mut input = InputBox::new();
@@ -177,6 +183,7 @@ mod tests {
         assert_eq!(input.cursor_pos, 0);
     }
 
+    /// Ensures set_mode changes the input mode state.
     #[test]
     fn set_mode_mutates_in_place() {
         let mut input = InputBox::new();
@@ -184,6 +191,7 @@ mod tests {
         assert_eq!(input.mode, Mode::Insert);
     }
 
+    /// Verifies multi-byte Unicode characters are inserted and deleted by character, not by byte.
     #[test]
     fn handles_unicode_correctly() {
         let mut input = InputBox::new();
@@ -194,6 +202,7 @@ mod tests {
         assert_eq!(input.cursor_pos, 1);
     }
 
+    /// Ensures InsertChar action delegates to insert_char correctly.
     #[test]
     fn handle_action_insert_char() {
         let mut input = InputBox::new();
@@ -201,6 +210,7 @@ mod tests {
         assert_eq!(input.content, "x");
     }
 
+    /// Ensures DeleteChar action delegates to delete_char correctly.
     #[test]
     fn handle_action_delete_char() {
         let mut input = InputBox::new();
@@ -209,6 +219,7 @@ mod tests {
         assert!(input.content.is_empty());
     }
 
+    /// Ensures SwitchMode action updates the input box's mode.
     #[test]
     fn handle_action_switch_mode() {
         let mut input = InputBox::new();

@@ -81,12 +81,14 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Ensures missing config file returns sensible defaults.
     #[test]
     fn load_config_returns_defaults_for_missing_file() {
         let result = load_config(Path::new("/nonexistent/path/config.toml")).unwrap();
         assert_eq!(result, AppConfig::default());
     }
 
+    /// Validates that a saved config can be loaded back with identical values.
     #[test]
     fn save_and_load_roundtrip() {
         let tmp = TempDir::new().unwrap();
@@ -103,6 +105,7 @@ mod tests {
         assert_eq!(loaded.general.default_model, "claude-sonnet-4-20250514");
     }
 
+    /// Ensures save_config creates intermediate directories when they do not exist.
     #[test]
     fn save_creates_parent_directories() {
         let tmp = TempDir::new().unwrap();
@@ -112,6 +115,7 @@ mod tests {
         assert!(path.exists());
     }
 
+    /// Ensures malformed TOML content produces a parse error.
     #[test]
     fn load_config_errors_on_invalid_toml() {
         let tmp = TempDir::new().unwrap();
@@ -122,12 +126,14 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// Validates that the embedded example config file parses to the same values as Default.
     #[test]
     fn example_config_parses_to_defaults() {
         let config: AppConfig = toml::from_str(EXAMPLE_CONFIG).unwrap();
         assert_eq!(config, AppConfig::default());
     }
 
+    /// Ensures first-run load writes the default config file to disk.
     #[test]
     fn load_config_writes_default_on_first_run() {
         let tmp = TempDir::new().unwrap();
@@ -138,6 +144,7 @@ mod tests {
         assert!(path.exists(), "default config should have been written");
     }
 
+    /// Validates that out-of-range values in a config file produce a validation error listing all violations.
     #[test]
     fn load_config_rejects_invalid_values() {
         let tmp = TempDir::new().unwrap();

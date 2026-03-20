@@ -199,6 +199,7 @@ mod tests {
     use super::*;
     use crate::llm::types::Message;
 
+    /// Verifies the provider reports the correct name for identification.
     #[test]
     fn ollama_provider_name() {
         let provider = OllamaProvider::new(
@@ -209,6 +210,7 @@ mod tests {
         assert_eq!(provider.name(), "ollama");
     }
 
+    /// Ensures model IDs from the local() convenience constructor are preserved.
     #[test]
     fn ollama_provider_models() {
         let provider = OllamaProvider::local(
@@ -221,6 +223,7 @@ mod tests {
         assert_eq!(models[1].id, "mistral");
     }
 
+    /// Ensures the chat URL is normalized with or without trailing slash.
     #[test]
     fn chat_url_construction() {
         let provider = OllamaProvider::new("ollama", "http://localhost:11434", vec![]);
@@ -230,12 +233,14 @@ mod tests {
         assert_eq!(provider.chat_url(), "http://localhost:11434/api/chat");
     }
 
+    /// Verifies the local() constructor uses the default Ollama URL.
     #[test]
     fn local_constructor_uses_default_url() {
         let provider = OllamaProvider::local("ollama", vec!["llama3.2".to_string()]);
         assert_eq!(provider.chat_url(), "http://localhost:11434/api/chat");
     }
 
+    /// Verifies ChatRequest messages are mapped to Ollama's format with roles preserved.
     #[test]
     fn ollama_request_from_chat_request() {
         let chat_req = ChatRequest::new(
@@ -255,6 +260,7 @@ mod tests {
         assert!(req.options.is_none());
     }
 
+    /// Verifies temperature and max_tokens are mapped to Ollama's options format.
     #[test]
     fn ollama_request_with_options() {
         let chat_req = ChatRequest::new("llama3.2", vec![Message::user("hi")])
@@ -267,6 +273,7 @@ mod tests {
         assert_eq!(opts.num_predict, Some(200));
     }
 
+    /// Verifies JSON serialization omits options when not set.
     #[test]
     fn ollama_request_serializes_correctly() {
         let chat_req = ChatRequest::new("llama3.2", vec![Message::user("hi")]);
@@ -278,6 +285,7 @@ mod tests {
         assert!(json.get("options").is_none());
     }
 
+    /// Verifies NDJSON lines with content are parsed into Delta chunks.
     #[test]
     fn parse_ollama_delta() {
         let line = r#"{"model":"llama3.2","created_at":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":"Hello"},"done":false}"#;
@@ -285,6 +293,7 @@ mod tests {
         assert_eq!(chunk, StreamChunk::Delta("Hello".to_string()));
     }
 
+    /// Verifies done:true signals stream completion.
     #[test]
     fn parse_ollama_done() {
         let line = r#"{"model":"llama3.2","created_at":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":""},"done":true}"#;
@@ -292,6 +301,7 @@ mod tests {
         assert_eq!(chunk, StreamChunk::Done);
     }
 
+    /// Verifies Ollama error responses are parsed into Error chunks.
     #[test]
     fn parse_ollama_error() {
         let line = r#"{"error":"model not found"}"#;
@@ -299,12 +309,14 @@ mod tests {
         assert_eq!(chunk, StreamChunk::Error("model not found".to_string()));
     }
 
+    /// Ensures empty/whitespace NDJSON lines are silently skipped.
     #[test]
     fn parse_ollama_empty_line_returns_none() {
         assert!(parse_ollama_line("").is_none());
         assert!(parse_ollama_line("  ").is_none());
     }
 
+    /// Ensures malformed JSON produces an Error chunk rather than panicking.
     #[test]
     fn parse_ollama_invalid_json_returns_error() {
         let chunk = parse_ollama_line("{bad json}").unwrap();
@@ -314,6 +326,7 @@ mod tests {
         }
     }
 
+    /// Verifies token usage (prompt_eval_count, eval_count) is extracted from done responses.
     #[test]
     fn parse_ollama_done_with_usage() {
         let line = r#"{"model":"llama3.2","created_at":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":28,"eval_count":150,"total_duration":1234}"#;
