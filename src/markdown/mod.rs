@@ -89,7 +89,7 @@ pub fn role_label(label: &str, color: Color) -> Line<'static> {
 /// A separator line between messages, using the given colour.
 pub fn separator(color: Color) -> Line<'static> {
     Line::from(Span::styled(
-        "\u{2500}".repeat(40),
+        "\u{2500}\u{2500}\u{2500}",
         Style::default().fg(color),
     ))
 }

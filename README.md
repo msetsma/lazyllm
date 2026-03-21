@@ -4,6 +4,8 @@ A fast, keyboard-driven TUI for chatting with LLMs. Inspired by [lazygit](https:
 
 ![Rust](https://img.shields.io/badge/Rust-2024-orange)
 
+![demo](demo/demo.gif)
+
 ## Features
 
 - **Multi-provider support** — OpenAI, Anthropic, Ollama, Google Gemini

@@ -1,0 +1,10 @@
+---
+source: src/ui/mod.rs
+assertion_line: 476
+expression: combined
+---
+ NORMAL   q:quit  i:insert  /:search  Tab:focus  j/k:scroll  ?:help
+ INSERT   Esc:normal  Enter:send  type to compose
+ VISUAL   Esc:normal  j/k:scroll  y:copy
+ COMMAND   Esc:cancel  Enter:execute
+ SEARCH   Esc:exit  Enter:next  Up/Down:prev/next  type to search

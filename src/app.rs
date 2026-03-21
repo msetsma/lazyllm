@@ -204,6 +204,7 @@ impl App {
                 self.config.general.default_provider = conv.provider.clone();
                 self.config.general.default_model = conv.model.clone();
                 let mut ms = ModelSelector::new(conv.provider.clone(), conv.model.clone());
+                ms.mcp_server_count = self.model_selector.mcp_server_count;
 
                 // Restore context from conversation
                 self.active_context = conv.context_name.clone();
@@ -908,7 +909,7 @@ impl App {
                 compaction::truncate_messages(&conv.messages, recent_count)
             }
             compaction::CompactionStrategy::ClientSummarization => {
-                // For now, fall back to truncation. Full summarization requires
+                // TODO: For now, fall back to truncation. Full summarization requires
                 // an async LLM call which would need to be handled via streaming.
                 compaction::truncate_messages(&conv.messages, recent_count)
             }
@@ -1120,6 +1121,7 @@ impl App {
         self.config.general.default_provider = provider.clone();
         self.config.general.default_model = model.clone();
         let mut ms = ModelSelector::new(provider.clone(), model.clone());
+        ms.mcp_server_count = self.model_selector.mcp_server_count;
         ms.context_name = self.active_context.clone();
         ms.context_usage_pct = self.model_selector.context_usage_pct;
         self.model_selector = ms;

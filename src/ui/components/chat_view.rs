@@ -205,33 +205,21 @@ impl ChatView {
         let has_search = !self.search_query.is_empty();
 
         for (msg_idx, msg) in self.messages.iter().enumerate() {
-            let (label, color) = match msg.role {
-                MessageRole::User => ("You", theme.user_label),
-                MessageRole::Assistant => ("Assistant", theme.assistant_label),
-                MessageRole::System => ("System", theme.system_label),
+            let (label_color, _msg_bg) = match msg.role {
+                MessageRole::User => (theme.user_label, theme.user_msg_bg),
+                MessageRole::Assistant => (theme.assistant_label, theme.assistant_msg_bg),
+                MessageRole::System => (theme.system_label, theme.assistant_msg_bg),
             };
 
-            // Role label (optionally with timestamp)
+            // Timestamp line (only if enabled)
             if self.show_timestamps {
                 if let Some(ts) = &msg.timestamp {
                     let ts_str = ts.format("%H:%M:%S").to_string();
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("{label}:"),
-                            Style::default()
-                                .fg(color)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            format!("  {ts_str}"),
-                            Style::default().fg(theme.timestamp),
-                        ),
-                    ]));
-                } else {
-                    lines.push(markdown::role_label(label, color));
+                    lines.push(Line::from(Span::styled(
+                        ts_str,
+                        Style::default().fg(theme.timestamp),
+                    )));
                 }
-            } else {
-                lines.push(markdown::role_label(label, color));
             }
 
             // Message content — assistant gets markdown + LaTeX/table preprocessing (if enabled)
@@ -245,13 +233,29 @@ impl ChatView {
                 }
             };
 
-            // Apply search highlighting if active
-            if has_search && self.matches_in_message(msg_idx) {
-                for line in content_lines {
-                    lines.push(self.highlight_line(line, highlight_style));
-                }
-            } else {
-                lines.extend(content_lines);
+            // Prepend colored bar to first line, apply message background
+            for (i, line) in content_lines.into_iter().enumerate() {
+                let styled_line = if has_search && self.matches_in_message(msg_idx) {
+                    self.highlight_line(line, highlight_style)
+                } else {
+                    let mut spans: Vec<Span<'static>> = Vec::new();
+                    if i == 0 {
+                        spans.push(Span::styled(
+                            "\u{258c} ",
+                            Style::default().fg(label_color),
+                        ));
+                    } else {
+                        spans.push(Span::styled(
+                            "  ",
+                            Style::default(),
+                        ));
+                    }
+                    for span in line.spans {
+                        spans.push(Span::styled(span.content, span.style));
+                    }
+                    Line::from(spans)
+                };
+                lines.push(styled_line);
             }
 
             // Separator between messages
@@ -447,9 +451,9 @@ mod tests {
         assert_eq!(view.scroll_offset, 0);
     }
 
-    /// Verifies build_lines renders "You:" and "Assistant:" role labels with message content.
+    /// Verifies build_lines renders role indicators and message content.
     #[test]
-    fn build_lines_includes_role_labels() {
+    fn build_lines_includes_role_indicators_and_content() {
         let theme = test_theme();
         let mut view = ChatView::new();
         view.add_message(chat_msg(MessageRole::User, "Hello"));
@@ -462,8 +466,8 @@ mod tests {
             .map(|s| s.content.as_ref())
             .collect();
 
-        assert!(content.contains("You:"));
-        assert!(content.contains("Assistant:"));
+        // Role indicators use a colored bar (\u{258c})
+        assert!(content.contains("\u{258c}"), "Expected role indicator bar");
         assert!(content.contains("Hello"));
         assert!(content.contains("Hi there"));
     }

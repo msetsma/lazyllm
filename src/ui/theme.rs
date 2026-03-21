@@ -24,7 +24,9 @@ pub struct Theme {
 
     // Chat messages
     pub user_label: Color,
+    pub user_msg_bg: Color,
     pub assistant_label: Color,
+    pub assistant_msg_bg: Color,
     pub system_label: Color,
     pub separator: Color,
     pub timestamp: Color,
@@ -70,7 +72,9 @@ impl Default for Theme {
             mode_command_fg: Color::Black,
 
             user_label: Color::Green,
+            user_msg_bg: Color::Rgb(30, 40, 30),
             assistant_label: Color::Blue,
+            assistant_msg_bg: Color::Reset,
             system_label: Color::Yellow,
             separator: Color::DarkGray,
             timestamp: Color::DarkGray,
@@ -120,7 +124,9 @@ pub struct ThemeConfig {
     pub mode_command_fg: Option<String>,
 
     pub user_label: Option<String>,
+    pub user_msg_bg: Option<String>,
     pub assistant_label: Option<String>,
+    pub assistant_msg_bg: Option<String>,
     pub system_label: Option<String>,
     pub separator: Option<String>,
     pub timestamp: Option<String>,
@@ -160,7 +166,9 @@ impl ThemeConfig {
             mode_command_bg: resolve_field(&self.mode_command_bg, d.mode_command_bg),
             mode_command_fg: resolve_field(&self.mode_command_fg, d.mode_command_fg),
             user_label: resolve_field(&self.user_label, d.user_label),
+            user_msg_bg: resolve_field(&self.user_msg_bg, d.user_msg_bg),
             assistant_label: resolve_field(&self.assistant_label, d.assistant_label),
+            assistant_msg_bg: resolve_field(&self.assistant_msg_bg, d.assistant_msg_bg),
             system_label: resolve_field(&self.system_label, d.system_label),
             separator: resolve_field(&self.separator, d.separator),
             timestamp: resolve_field(&self.timestamp, d.timestamp),
