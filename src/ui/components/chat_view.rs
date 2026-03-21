@@ -1,8 +1,12 @@
+use std::cell::Cell;
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+};
 
 use crate::event::types::Action;
 use crate::markdown;
@@ -51,13 +55,15 @@ pub struct SearchMatch {
 #[derive(Debug, Clone)]
 pub struct ChatView {
     pub(crate) messages: Vec<ChatMessage>,
-    pub(crate) scroll_offset: u16,
+    pub(crate) scroll_offset: Cell<u16>,
     pub(crate) show_timestamps: bool,
     pub(crate) render_options: RenderOptions,
     pub(crate) markdown_rendering: bool,
     pub(crate) search_query: String,
     pub(crate) search_matches: Vec<SearchMatch>,
     pub(crate) search_current: usize,
+    pub(crate) visual_mode: bool,
+    pub(crate) visual_selection: Option<usize>,
 }
 
 impl Default for ChatView {
@@ -70,13 +76,15 @@ impl ChatView {
     pub fn new() -> Self {
         Self {
             messages: Vec::new(),
-            scroll_offset: 0,
+            scroll_offset: Cell::new(0),
             show_timestamps: false,
             render_options: RenderOptions::default(),
             markdown_rendering: true,
             search_query: String::new(),
             search_matches: Vec::new(),
             search_current: 0,
+            visual_mode: false,
+            visual_selection: None,
         }
     }
 
@@ -107,26 +115,64 @@ impl ChatView {
 
     pub fn add_message(&mut self, message: ChatMessage) {
         self.messages.push(message);
-        self.scroll_offset = 0;
+        self.scroll_offset.set(0);
     }
 
     pub fn append_to_last(&mut self, text: &str) {
         if let Some(last) = self.messages.last_mut() {
             last.content.push_str(text);
+            self.scroll_offset.set(0);
         }
     }
 
     pub fn clear(&mut self) {
         self.messages.clear();
-        self.scroll_offset = 0;
+        self.scroll_offset.set(0);
     }
 
     fn scroll_up(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_add(1);
+        self.scroll_offset.set(self.scroll_offset.get().saturating_add(1));
     }
 
     fn scroll_down(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        self.scroll_offset.set(self.scroll_offset.get().saturating_sub(1));
+    }
+
+    pub fn enter_visual_mode(&mut self) {
+        self.visual_mode = true;
+        // Start selection on the last message
+        if !self.messages.is_empty() {
+            self.visual_selection = Some(self.messages.len() - 1);
+        }
+    }
+
+    pub fn exit_visual_mode(&mut self) {
+        self.visual_mode = false;
+        self.visual_selection = None;
+        self.scroll_offset.set(0);
+    }
+
+    fn visual_select_prev(&mut self) {
+        if let Some(idx) = self.visual_selection {
+            if idx > 0 {
+                self.visual_selection = Some(idx - 1);
+            }
+        }
+    }
+
+    fn visual_select_next(&mut self) {
+        if let Some(idx) = self.visual_selection {
+            if idx + 1 < self.messages.len() {
+                self.visual_selection = Some(idx + 1);
+            }
+        }
+    }
+
+    /// Get the content of the currently selected message in visual mode.
+    pub fn selected_content(&self) -> Option<&str> {
+        self.visual_selection
+            .and_then(|idx| self.messages.get(idx))
+            .map(|m| m.content.as_str())
     }
 
     /// Update the search query and recompute matches (case-insensitive).
@@ -196,15 +242,35 @@ impl ChatView {
 
     /// Build all lines for rendering, using markdown for assistant messages.
     /// Preprocesses assistant content to convert LaTeX and tables before rendering.
-    fn build_lines(&self, theme: &Theme) -> Vec<Line<'static>> {
+    /// Returns (lines, message_line_starts) where message_line_starts[i] is the
+    /// logical line index where message i begins.
+    #[cfg(test)]
+    fn build_lines(&self, theme: &Theme) -> (Vec<Line<'static>>, Vec<usize>) {
+        self.build_lines_with_width(theme, 0)
+    }
+
+    fn build_lines_with_width(
+        &self,
+        theme: &Theme,
+        inner_width: usize,
+    ) -> (Vec<Line<'static>>, Vec<usize>) {
         let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut message_line_starts: Vec<usize> = Vec::new();
         let highlight_style = Style::default()
             .bg(theme.highlight)
             .fg(ratatui::style::Color::Black)
             .add_modifier(Modifier::BOLD);
         let has_search = !self.search_query.is_empty();
 
+        // Highlight the selected message in visual mode
+        let visual_target = if self.visual_mode {
+            self.visual_selection
+        } else {
+            None
+        };
+
         for (msg_idx, msg) in self.messages.iter().enumerate() {
+            message_line_starts.push(lines.len());
             let (label_color, _msg_bg) = match msg.role {
                 MessageRole::User => (theme.user_label, theme.user_msg_bg),
                 MessageRole::Assistant => (theme.assistant_label, theme.assistant_msg_bg),
@@ -234,22 +300,79 @@ impl ChatView {
             };
 
             // Prepend colored bar to first line, apply message background
-            for (i, line) in content_lines.into_iter().enumerate() {
+            let is_visual_target = visual_target == Some(msg_idx);
+
+            // Visual selection: bright left border on every line
+            let bar_color = if is_visual_target {
+                theme.visual_select
+            } else {
+                label_color
+            };
+
+            let is_user = msg.role == MessageRole::User;
+            // User messages: right-aligned bubble with background
+            // Max bubble width is 2/3 of inner width; indent fills the rest
+            let max_bubble = if is_user && inner_width > 20 {
+                (inner_width * 2) / 3
+            } else {
+                inner_width
+            };
+            // Find the longest content line to size the bubble
+            let longest_content: usize = if is_user {
+                content_lines
+                    .iter()
+                    .map(|l| l.spans.iter().map(|s| s.content.len()).sum::<usize>())
+                    .max()
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            // Bubble width: content + 2 padding + 2 for bar chars, capped at max
+            let bubble_content_width = longest_content.min(max_bubble.saturating_sub(4));
+            let bubble_total = bubble_content_width + 4; // " " + content + " " + "▐"  + 1 bar
+            let bubble_indent = if is_user && inner_width > bubble_total {
+                inner_width - bubble_total
+            } else {
+                0
+            };
+
+            for (_i, line) in content_lines.into_iter().enumerate() {
                 let styled_line = if has_search && self.matches_in_message(msg_idx) {
                     self.highlight_line(line, highlight_style)
-                } else {
-                    let mut spans: Vec<Span<'static>> = Vec::new();
-                    if i == 0 {
-                        spans.push(Span::styled(
-                            "\u{258c} ",
-                            Style::default().fg(label_color),
-                        ));
+                } else if is_user {
+                    // User bubble: indent + background color + bar on right
+                    let bg_style = Style::default()
+                        .bg(theme.user_msg_bg)
+                        .fg(ratatui::style::Color::White);
+                    let bar_style = if is_visual_target {
+                        Style::default().fg(theme.visual_select)
                     } else {
-                        spans.push(Span::styled(
-                            "  ",
-                            Style::default(),
-                        ));
+                        Style::default().fg(bar_color)
+                    };
+                    let mut spans: Vec<Span<'static>> = Vec::new();
+                    if bubble_indent > 0 {
+                        spans.push(Span::raw(" ".repeat(bubble_indent)));
                     }
+                    spans.push(Span::styled(" ", bg_style));
+                    // Pad each line to the bubble width for consistent background
+                    let line_len: usize =
+                        line.spans.iter().map(|s| s.content.len()).sum();
+                    let pad = bubble_content_width.saturating_sub(line_len);
+                    if pad > 0 {
+                        spans.push(Span::styled(" ".repeat(pad), bg_style));
+                    }
+                    for span in line.spans {
+                        spans.push(Span::styled(span.content, bg_style.patch(span.style)));
+                    }
+                    spans.push(Span::styled(" \u{2590}", bar_style));
+                    Line::from(spans)
+                } else {
+                    // Assistant/system: left-aligned with colored bar
+                    let mut spans: Vec<Span<'static>> = Vec::new();
+                    spans.push(Span::styled(
+                        "\u{258c} ",
+                        Style::default().fg(bar_color),
+                    ));
                     for span in line.spans {
                         spans.push(Span::styled(span.content, span.style));
                     }
@@ -264,7 +387,7 @@ impl ChatView {
             lines.push(Line::from(""));
         }
 
-        lines
+        (lines, message_line_starts)
     }
 
     /// Check if any search matches exist in a given message.
@@ -324,11 +447,19 @@ impl Component for ChatView {
     fn handle_action(&mut self, action: &Action) -> Option<Action> {
         match action {
             Action::ScrollUp => {
-                self.scroll_up();
+                if self.visual_mode {
+                    self.visual_select_prev();
+                } else {
+                    self.scroll_up();
+                }
                 None
             }
             Action::ScrollDown => {
-                self.scroll_down();
+                if self.visual_mode {
+                    self.visual_select_next();
+                } else {
+                    self.scroll_down();
+                }
                 None
             }
             _ => None,
@@ -337,29 +468,122 @@ impl Component for ChatView {
 
     fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         let border_style = super::focused_border_style(focused, theme);
-        let lines = self.build_lines(theme);
 
-        // Auto-scroll to bottom: calculate total lines vs visible area
-        let inner_height = area.height.saturating_sub(2); // borders
-        let total_lines = lines.len() as u16;
-        let auto_scroll = if self.scroll_offset == 0 && total_lines > inner_height {
-            total_lines.saturating_sub(inner_height)
+        let inner_height = area.height.saturating_sub(2) as usize; // borders
+        let inner_width = area.width.saturating_sub(2) as usize; // borders
+
+        let (lines, msg_line_starts) = self.build_lines_with_width(theme, inner_width);
+
+        // Compute cumulative visual line offsets per logical line
+        let visual_offsets: Vec<usize> = if inner_width == 0 {
+            (0..lines.len()).collect()
         } else {
-            self.scroll_offset
+            let mut offsets = Vec::with_capacity(lines.len());
+            let mut cumulative = 0usize;
+            for line in &lines {
+                offsets.push(cumulative);
+                let width: usize = line.spans.iter().map(|s| s.content.len()).sum();
+                cumulative += 1.max(width.div_ceil(inner_width));
+            }
+            offsets
+        };
+
+        let visual_lines = if let Some(last_offset) = visual_offsets.last() {
+            // last offset + visual height of the last logical line
+            let last_width: usize = lines.last().map_or(0, |l| {
+                l.spans.iter().map(|s| s.content.len()).sum()
+            });
+            let last_height = if inner_width == 0 {
+                1
+            } else {
+                1.max(last_width.div_ceil(inner_width))
+            };
+            last_offset + last_height
+        } else {
+            0
+        };
+
+        let max_scroll = visual_lines.saturating_sub(inner_height);
+
+        // In visual mode, auto-scroll so the selected message is visible
+        if self.visual_mode {
+            if let Some(sel_idx) = self.visual_selection {
+                if let Some(&logical_start) = msg_line_starts.get(sel_idx) {
+                    // Visual line where the selected message starts
+                    let sel_visual_start = visual_offsets
+                        .get(logical_start)
+                        .copied()
+                        .unwrap_or(0);
+                    // Visual line where it ends (start of next msg, or end)
+                    let sel_visual_end = msg_line_starts
+                        .get(sel_idx + 1)
+                        .and_then(|&ls| visual_offsets.get(ls).copied())
+                        .unwrap_or(visual_lines);
+
+                    // Convert current scroll_offset (from bottom) to from-top
+                    let current_top = max_scroll.saturating_sub(self.scroll_offset.get() as usize);
+                    let current_bottom = current_top + inner_height;
+
+                    let new_top = if sel_visual_start < current_top {
+                        // Selected message is above viewport — scroll up to show it
+                        sel_visual_start
+                    } else if sel_visual_end > current_bottom {
+                        // Selected message is below viewport — scroll down
+                        sel_visual_end.saturating_sub(inner_height)
+                    } else {
+                        current_top
+                    };
+
+                    // Convert back to offset-from-bottom
+                    self.scroll_offset.set(max_scroll.saturating_sub(new_top) as u16);
+                }
+            }
+        }
+
+        // scroll_offset is "visual lines up from the bottom":
+        //   0 = pinned to bottom (auto-scroll)
+        //   N = N lines above the bottom
+        let scroll_from_top = max_scroll.saturating_sub(self.scroll_offset.get() as usize);
+
+        // Dynamic title with scroll position indicator
+        let title = if self.scroll_offset.get() > 0 && visual_lines > inner_height {
+            let pct = ((scroll_from_top + inner_height) as f64 / visual_lines as f64 * 100.0)
+                as u16;
+            format!(" Chat [{pct}%] ")
+        } else {
+            " Chat ".to_string()
         };
 
         let text = Text::from(lines);
         let paragraph = Paragraph::new(text)
             .block(
                 Block::default()
-                    .title(" Chat ")
+                    .title(title)
                     .borders(Borders::ALL)
                     .border_style(border_style),
             )
             .wrap(Wrap { trim: false })
-            .scroll((auto_scroll, 0));
+            .scroll((scroll_from_top as u16, 0));
 
         frame.render_widget(paragraph, area);
+
+        // Scrollbar (only when content overflows), rendered inside the border
+        if visual_lines > inner_height {
+            let scrollbar_area = Rect {
+                x: area.x,
+                y: area.y + 1,
+                width: area.width,
+                height: area.height.saturating_sub(2),
+            };
+            let mut scrollbar_state =
+                ScrollbarState::new(max_scroll).position(scroll_from_top);
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some(" "))
+                .thumb_symbol("▐");
+            frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+        }
     }
 }
 
@@ -385,7 +609,7 @@ mod tests {
     fn new_chat_view_is_empty() {
         let view = ChatView::new();
         assert!(view.messages.is_empty());
-        assert_eq!(view.scroll_offset, 0);
+        assert_eq!(view.scroll_offset.get(), 0);
         assert!(!view.show_timestamps);
     }
 
@@ -429,18 +653,18 @@ mod tests {
     fn scroll_up_increments_offset() {
         let mut view = ChatView::new();
         view.scroll_up();
-        assert_eq!(view.scroll_offset, 1);
+        assert_eq!(view.scroll_offset.get(), 1);
         view.scroll_up();
-        assert_eq!(view.scroll_offset, 2);
+        assert_eq!(view.scroll_offset.get(), 2);
     }
 
     /// Ensures scroll_down decrements the scroll offset.
     #[test]
     fn scroll_down_decrements_offset() {
         let mut view = ChatView::new();
-        view.scroll_offset = 3;
+        view.scroll_offset.set(3);
         view.scroll_down();
-        assert_eq!(view.scroll_offset, 2);
+        assert_eq!(view.scroll_offset.get(), 2);
     }
 
     /// Ensures scroll_down clamps at zero and does not underflow.
@@ -448,7 +672,7 @@ mod tests {
     fn scroll_down_does_not_go_below_zero() {
         let mut view = ChatView::new();
         view.scroll_down();
-        assert_eq!(view.scroll_offset, 0);
+        assert_eq!(view.scroll_offset.get(), 0);
     }
 
     /// Verifies build_lines renders role indicators and message content.
@@ -458,7 +682,7 @@ mod tests {
         let mut view = ChatView::new();
         view.add_message(chat_msg(MessageRole::User, "Hello"));
         view.add_message(chat_msg(MessageRole::Assistant, "Hi there"));
-        let lines = view.build_lines(&theme);
+        let (lines, _) = view.build_lines(&theme);
 
         let content: String = lines
             .iter()
@@ -478,7 +702,7 @@ mod tests {
         let theme = test_theme();
         let mut view = ChatView::new();
         view.add_message(chat_msg(MessageRole::Assistant, "**bold text**"));
-        let lines = view.build_lines(&theme);
+        let (lines, _) = view.build_lines(&theme);
 
         let has_bold = lines.iter().any(|line| {
             line.spans.iter().any(|span| {
@@ -495,7 +719,7 @@ mod tests {
         let theme = test_theme();
         let mut view = ChatView::new();
         view.add_message(chat_msg(MessageRole::User, "**not bold**"));
-        let lines = view.build_lines(&theme);
+        let (lines, _) = view.build_lines(&theme);
 
         let content: String = lines
             .iter()
@@ -514,7 +738,7 @@ mod tests {
             MessageRole::Assistant,
             "```rust\nfn main() {}\n```",
         ));
-        let lines = view.build_lines(&theme);
+        let (lines, _) = view.build_lines(&theme);
 
         let content: String = lines
             .iter()
@@ -534,7 +758,7 @@ mod tests {
         let mut view = ChatView::new();
         view.add_message(chat_msg(MessageRole::User, "hello"));
         view.add_message(chat_msg(MessageRole::Assistant, "hi"));
-        let lines = view.build_lines(&theme);
+        let (lines, _) = view.build_lines(&theme);
 
         let has_separator = lines.iter().any(|line| {
             line.spans
@@ -549,9 +773,9 @@ mod tests {
     fn handle_action_scrolls() {
         let mut view = ChatView::new();
         view.handle_action(&Action::ScrollUp);
-        assert_eq!(view.scroll_offset, 1);
+        assert_eq!(view.scroll_offset.get(), 1);
         view.handle_action(&Action::ScrollDown);
-        assert_eq!(view.scroll_offset, 0);
+        assert_eq!(view.scroll_offset.get(), 0);
     }
 
     /// Ensures multiline message content renders all lines in the output.
@@ -560,7 +784,7 @@ mod tests {
         let theme = test_theme();
         let mut view = ChatView::new();
         view.add_message(chat_msg(MessageRole::User, "line1\nline2\nline3"));
-        let lines = view.build_lines(&theme);
+        let (lines, _) = view.build_lines(&theme);
 
         let content: String = lines
             .iter()
@@ -586,7 +810,7 @@ mod tests {
             timestamp: Some(ts),
         });
 
-        let lines = view.build_lines(&theme);
+        let (lines, _) = view.build_lines(&theme);
         let content: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
@@ -614,7 +838,7 @@ mod tests {
             timestamp: Some(ts),
         });
 
-        let lines = view.build_lines(&theme);
+        let (lines, _) = view.build_lines(&theme);
         let content: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())

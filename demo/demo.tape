@@ -4,11 +4,11 @@
 
 Output demo/demo.gif
 Set FontSize 16
-Set Width 750
-Set Height 500
+Set Width 900
+Set Height 550
 Set Padding 5
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 75ms
+Set TypingSpeed 65ms
 Set Shell zsh
 
 # Launch the app silently — hide the command from the recording
@@ -33,6 +33,27 @@ Sleep 5s
 Escape
 Sleep 600ms
 
+# Toggle timestamps on via command mode
+Type ":set timestamps on"
+Enter
+Sleep 1s
+
+# Enter visual mode — highlight moves to last message
+Type "v"
+Sleep 1s
+
+# Scroll up through messages with k
+Type "k"
+Sleep 800ms
+
+# Copy the selected message
+Type "y"
+Sleep 1.5s
+
+# Exit visual mode — snaps back to bottom
+Escape
+Sleep 800ms
+
 # Focus to chat list and create a second chat
 Type "h"
 Sleep 500ms
@@ -40,8 +61,6 @@ Type "n"
 Sleep 800ms
 
 # Focus to input and send a message in the second chat
-Type "l"
-Sleep 300ms
 Type "l"
 Sleep 300ms
 Type "i"
@@ -71,10 +90,16 @@ Sleep 1s
 Type "l"
 Sleep 500ms
 
-# Open help overlay
+# Open tool panel popup
+Type "t"
+Sleep 1.5s
+Escape
+Sleep 500ms
+
+# Open help overlay — keys are blocked while open
 Type "?"
 Sleep 2s
-Type "?"
+Escape
 Sleep 500ms
 
 # Open model selector popup

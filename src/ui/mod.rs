@@ -27,14 +27,9 @@ pub fn render(app: &App, frame: &mut Frame) {
     let input_area = vertical[2];
     let status_area = vertical[3];
 
-    // Horizontal body: chat list | chat view | tool panel
+    // Horizontal body: chat list | chat view
     let sidebar_width = if app.config.ui.show_sidebar {
         app.config.ui.sidebar_width
-    } else {
-        0
-    };
-    let tool_panel_width = if app.config.ui.show_tool_panel {
-        app.config.ui.tool_panel_width
     } else {
         0
     };
@@ -43,13 +38,11 @@ pub fn render(app: &App, frame: &mut Frame) {
         .constraints([
             Constraint::Length(sidebar_width),
             Constraint::Min(20),
-            Constraint::Length(tool_panel_width),
         ])
         .split(body_area);
 
     let chat_list_area = body_layout[0];
     let chat_view_area = body_layout[1];
-    let tool_panel_area = body_layout[2];
 
     // Render each component
     use crate::event::types::FocusTarget;
@@ -60,13 +53,11 @@ pub fn render(app: &App, frame: &mut Frame) {
         app.chat_list.render(frame, chat_list_area, app.focus == FocusTarget::ChatList, theme);
     }
     app.chat_view.render(frame, chat_view_area, app.focus == FocusTarget::ChatView, theme);
-    if app.config.ui.show_tool_panel {
-        app.tool_panel.render(frame, tool_panel_area, app.focus == FocusTarget::ToolPanel, theme);
-    }
     app.input_box.render(frame, input_area, app.focus == FocusTarget::Input, theme);
     app.status_bar.render(frame, status_area, false, theme);
 
     // Render overlays last (on top)
+    app.tool_panel.render(frame, size, false, theme);
     app.help_overlay.render(frame, size, false, theme);
     app.model_popup.render(frame, size, false, theme);
 }
@@ -351,7 +342,6 @@ mod tests {
     fn full_app_render_with_messages() {
         let mut app = test_app();
         app.config.ui.show_sidebar = false;
-        app.config.ui.show_tool_panel = false;
         app.chat_view.set_markdown_rendering(false);
         app.chat_view.add_message(ChatMessage {
             role: MessageRole::User,

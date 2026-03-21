@@ -50,6 +50,7 @@ impl HelpOverlay {
             binding("n", "New chat", theme),
             binding("d", "Delete chat", theme),
             binding("m", "Select model", theme),
+            binding("t", "Toggle tool panel", theme),
             binding("/", "Search in conversation", theme),
             binding("?", "Toggle this help", theme),
             binding("q", "Quit", theme),
@@ -76,6 +77,7 @@ impl HelpOverlay {
             binding(":compact", "Compact conversation", theme),
             binding(":checkpoints", "List checkpoints", theme),
             binding(":restore [id]", "Restore checkpoint", theme),
+            binding(":set timestamps on/off", "Toggle timestamps", theme),
             binding(":set <key> <val>", "Change setting", theme),
             binding(":help", "Toggle help", theme),
         ]

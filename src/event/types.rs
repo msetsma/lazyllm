@@ -17,6 +17,7 @@ pub enum Action {
     DeleteChar,
     InputSubmit,
     ToggleHelp,
+    ToggleToolPanel,
     ToggleModelSelector,
     SelectModel,
     CopySelection,
@@ -56,7 +57,6 @@ pub enum FocusTarget {
     ChatList,
     #[default]
     ChatView,
-    ToolPanel,
     Input,
 }
 
@@ -64,8 +64,7 @@ impl FocusTarget {
     pub fn next(self) -> Self {
         match self {
             FocusTarget::ChatList => FocusTarget::ChatView,
-            FocusTarget::ChatView => FocusTarget::ToolPanel,
-            FocusTarget::ToolPanel => FocusTarget::Input,
+            FocusTarget::ChatView => FocusTarget::Input,
             FocusTarget::Input => FocusTarget::ChatList,
         }
     }
@@ -74,8 +73,7 @@ impl FocusTarget {
         match self {
             FocusTarget::ChatList => FocusTarget::Input,
             FocusTarget::ChatView => FocusTarget::ChatList,
-            FocusTarget::ToolPanel => FocusTarget::ChatView,
-            FocusTarget::Input => FocusTarget::ToolPanel,
+            FocusTarget::Input => FocusTarget::ChatView,
         }
     }
 }
@@ -101,17 +99,15 @@ mod tests {
         assert_eq!(Mode::Command.label(), "COMMAND");
     }
 
-    /// Ensures focus_next cycles through all four panels and wraps back to the start.
+    /// Ensures focus_next cycles through all three panels and wraps back to the start.
     #[test]
     fn focus_next_cycles_through_all_panels() {
         let start = FocusTarget::ChatList;
         let second = start.next();
         assert_eq!(second, FocusTarget::ChatView);
         let third = second.next();
-        assert_eq!(third, FocusTarget::ToolPanel);
-        let fourth = third.next();
-        assert_eq!(fourth, FocusTarget::Input);
-        let back = fourth.next();
+        assert_eq!(third, FocusTarget::Input);
+        let back = third.next();
         assert_eq!(back, FocusTarget::ChatList);
     }
 
@@ -122,7 +118,7 @@ mod tests {
         let prev = start.prev();
         assert_eq!(prev, FocusTarget::Input);
         let prev2 = prev.prev();
-        assert_eq!(prev2, FocusTarget::ToolPanel);
+        assert_eq!(prev2, FocusTarget::ChatView);
     }
 
     /// Verifies next() and prev() are inverses for every FocusTarget variant.
@@ -131,7 +127,6 @@ mod tests {
         for target in [
             FocusTarget::ChatList,
             FocusTarget::ChatView,
-            FocusTarget::ToolPanel,
             FocusTarget::Input,
         ] {
             assert_eq!(target.next().prev(), target);

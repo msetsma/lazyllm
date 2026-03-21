@@ -33,6 +33,7 @@ fn resolve_insert_mode(key: KeyEvent, _focus: FocusTarget) -> Action {
 
 fn resolve_normal_mode(key: KeyEvent, _focus: FocusTarget) -> Action {
     match key.code {
+        KeyCode::Esc => Action::SwitchMode(Mode::Normal),
         KeyCode::Char('q') => Action::Quit,
         KeyCode::Char('i') => Action::SwitchMode(Mode::Insert),
         KeyCode::Char('v') => Action::SwitchMode(Mode::Visual),
@@ -46,6 +47,7 @@ fn resolve_normal_mode(key: KeyEvent, _focus: FocusTarget) -> Action {
         KeyCode::Char('n') => Action::NewChat,
         KeyCode::Char('d') => Action::DeleteChat,
         KeyCode::Char('m') => Action::ToggleModelSelector,
+        KeyCode::Char('t') => Action::ToggleToolPanel,
         KeyCode::Char('?') => Action::ToggleHelp,
         KeyCode::Char('l') | KeyCode::Right => Action::FocusNext,
         KeyCode::Char('h') | KeyCode::Left => Action::FocusPrev,

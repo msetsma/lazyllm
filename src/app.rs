@@ -291,6 +291,14 @@ impl App {
             return;
         }
 
+        if self.help_overlay.visible && self.handle_help_overlay_action(&action) {
+            return;
+        }
+
+        if self.tool_panel.visible && self.handle_tool_panel_action(&action) {
+            return;
+        }
+
         match action {
             Action::Quit => {
                 self.save_active_conversation();
@@ -305,6 +313,16 @@ impl App {
                 if self.mode == Mode::Search && mode != Mode::Search {
                     self.chat_view.clear_search();
                     self.input_box.take_content();
+                }
+                // Entering Visual mode: focus the chat view, highlight copy target
+                if mode == Mode::Visual {
+                    self.focus = FocusTarget::ChatView;
+                    self.chat_view.enter_visual_mode();
+                }
+                // Leaving Visual mode: snap back to bottom and return focus to input
+                if self.mode == Mode::Visual && mode != Mode::Visual {
+                    self.chat_view.exit_visual_mode();
+                    self.focus = FocusTarget::Input;
                 }
                 self.mode = mode;
                 self.input_box.handle_action(&Action::SwitchMode(mode));
@@ -373,7 +391,12 @@ impl App {
                 }
             }
             Action::ScrollUp | Action::ScrollDown => {
-                self.dispatch_to_focused(&action);
+                if self.mode == Mode::Visual {
+                    // Visual mode always scrolls the chat view
+                    self.chat_view.handle_action(&action);
+                } else {
+                    self.dispatch_to_focused(&action);
+                }
             }
             Action::NewChat => {
                 if self.conversations.store.is_some() {
@@ -398,6 +421,9 @@ impl App {
             }
             Action::ToggleHelp => {
                 self.help_overlay.handle_action(&action);
+            }
+            Action::ToggleToolPanel => {
+                self.tool_panel.handle_action(&action);
             }
             Action::ToggleModelSelector => {
                 if self.model_popup.visible {
@@ -435,25 +461,36 @@ impl App {
         }
     }
 
-    /// Copy the last assistant response content to the system clipboard.
+    /// Copy the selected (visual mode) or last assistant response to clipboard.
     fn copy_last_response(&mut self) {
-        let content = match self
-            .chat_view
-            .messages
-            .iter()
-            .rev()
-            .find(|m| m.role == MessageRole::Assistant)
-        {
-            Some(msg) if !msg.content.is_empty() => msg.content.clone(),
-            Some(_) => {
+        // In visual mode, copy whichever message is selected
+        let content = if let Some(text) = self.chat_view.selected_content() {
+            if text.is_empty() {
                 self.status_bar
                     .set_status("Nothing to copy".to_string());
                 return;
             }
-            None => {
-                self.status_bar
-                    .set_status("No assistant message to copy".to_string());
-                return;
+            text.to_string()
+        } else {
+            // Fallback: last assistant message
+            match self
+                .chat_view
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == MessageRole::Assistant)
+            {
+                Some(msg) if !msg.content.is_empty() => msg.content.clone(),
+                Some(_) => {
+                    self.status_bar
+                        .set_status("Nothing to copy".to_string());
+                    return;
+                }
+                None => {
+                    self.status_bar
+                        .set_status("No assistant message to copy".to_string());
+                    return;
+                }
             }
         };
 
@@ -847,6 +884,24 @@ impl App {
                     }
                 }
             }
+            "timestamps" | "show_timestamps" => {
+                match value {
+                    "true" | "on" | "1" => {
+                        self.config.ui.show_timestamps = true;
+                        self.chat_view.set_show_timestamps(true);
+                        self.status_bar.set_status("show_timestamps = true".to_string());
+                    }
+                    "false" | "off" | "0" => {
+                        self.config.ui.show_timestamps = false;
+                        self.chat_view.set_show_timestamps(false);
+                        self.status_bar.set_status("show_timestamps = false".to_string());
+                    }
+                    _ => {
+                        self.status_bar
+                            .set_status("show_timestamps must be true/false".to_string());
+                    }
+                }
+            }
             "system_prompt" => {
                 if value == "none" || value == "clear" {
                     self.config.general.system_prompt = None;
@@ -1092,6 +1147,28 @@ impl App {
     }
 
     /// Handle actions when the model popup is visible. Returns true if consumed.
+    fn handle_help_overlay_action(&mut self, action: &Action) -> bool {
+        match action {
+            Action::SwitchMode(Mode::Normal) | Action::ToggleHelp => {
+                self.help_overlay.visible = false;
+                true
+            }
+            Action::Quit | Action::Tick => false, // pass through
+            _ => true,                            // consume other actions
+        }
+    }
+
+    fn handle_tool_panel_action(&mut self, action: &Action) -> bool {
+        match action {
+            Action::SwitchMode(Mode::Normal) | Action::ToggleToolPanel => {
+                self.tool_panel.close();
+                true
+            }
+            Action::Quit | Action::Tick => false, // pass through
+            _ => true,                            // consume other actions
+        }
+    }
+
     fn handle_popup_action(&mut self, action: &Action) -> bool {
         match action {
             Action::ScrollUp
@@ -1519,9 +1596,6 @@ impl App {
             FocusTarget::ChatView => {
                 self.chat_view.handle_action(action);
             }
-            FocusTarget::ToolPanel => {
-                self.tool_panel.handle_action(action);
-            }
             FocusTarget::Input => {}
         }
     }
@@ -1613,12 +1687,12 @@ mod tests {
         assert_eq!(app.focus, FocusTarget::Input);
     }
 
-    /// Ensures FocusNext cycles from ChatView to the next panel (ToolPanel).
+    /// Ensures FocusNext cycles from ChatView to the next panel (Input).
     #[tokio::test]
     async fn focus_next_cycles_panels() {
         let mut app = test_app();
         app.update(Action::FocusNext).await;
-        assert_eq!(app.focus, FocusTarget::ToolPanel);
+        assert_eq!(app.focus, FocusTarget::Input);
     }
 
     /// Ensures FocusPrev cycles backwards from ChatView to ChatList.
@@ -1677,7 +1751,7 @@ mod tests {
     async fn scroll_dispatches_to_focused_panel() {
         let mut app = test_app();
         app.update(Action::ScrollUp).await;
-        assert_eq!(app.chat_view.scroll_offset, 1);
+        assert_eq!(app.chat_view.scroll_offset.get(), 1);
     }
 
     /// Verifies ToggleHelp flips the help overlay visibility on and off.

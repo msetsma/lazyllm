@@ -33,6 +33,7 @@ pub struct Theme {
 
     // Highlights & selection
     pub highlight: Color,
+    pub visual_select: Color,
 
     // UI chrome
     pub hint_text: Color,
@@ -80,6 +81,7 @@ impl Default for Theme {
             timestamp: Color::DarkGray,
 
             highlight: Color::Cyan,
+            visual_select: Color::Magenta,
 
             hint_text: Color::DarkGray,
             status_message: Color::Yellow,
@@ -132,6 +134,7 @@ pub struct ThemeConfig {
     pub timestamp: Option<String>,
 
     pub highlight: Option<String>,
+    pub visual_select: Option<String>,
 
     pub hint_text: Option<String>,
     pub status_message: Option<String>,
@@ -173,6 +176,7 @@ impl ThemeConfig {
             separator: resolve_field(&self.separator, d.separator),
             timestamp: resolve_field(&self.timestamp, d.timestamp),
             highlight: resolve_field(&self.highlight, d.highlight),
+            visual_select: resolve_field(&self.visual_select, d.visual_select),
             hint_text: resolve_field(&self.hint_text, d.hint_text),
             status_message: resolve_field(&self.status_message, d.status_message),
             label: resolve_field(&self.label, d.label),

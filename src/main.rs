@@ -2,7 +2,6 @@ use std::io;
 use std::time::Duration;
 
 use color_eyre::eyre::Result;
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -59,13 +58,13 @@ async fn main() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     // Event loop
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let _event_handle = lazyllm::event::spawn_event_loop(tx, Duration::from_millis(250));
+    let _event_handle = lazyllm::event::spawn_event_loop(tx, Duration::from_millis(33));
 
     // Main loop
     while app.is_running() {
@@ -87,11 +86,7 @@ async fn main() -> Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     tracing::info!("lazyllm exiting");
