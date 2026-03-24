@@ -3,6 +3,7 @@ pub mod capabilities;
 pub mod compaction;
 pub mod context;
 pub mod google;
+pub mod health;
 pub mod ollama;
 pub mod openai;
 pub mod pricing;

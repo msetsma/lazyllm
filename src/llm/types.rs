@@ -108,6 +108,10 @@ pub struct ChatRequest {
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
     pub tools: Option<Vec<ToolDefinition>>,
+    /// Whether to use server-side compaction (Anthropic only).
+    pub server_compaction: bool,
+    /// Custom instructions to include in the compaction config (e.g. pinned message content).
+    pub compaction_instructions: Option<String>,
 }
 
 impl ChatRequest {
@@ -118,6 +122,8 @@ impl ChatRequest {
             temperature: None,
             max_tokens: None,
             tools: None,
+            server_compaction: false,
+            compaction_instructions: None,
         }
     }
 
@@ -236,6 +242,11 @@ pub enum StreamChunk {
     ToolCallStart { id: String, name: String, arguments: String },
     /// Result from executing a tool call.
     ToolCallResult { id: String, content: String, is_error: bool },
+    /// Server-side compaction occurred (e.g. Anthropic context_management).
+    CompactionOccurred {
+        summary_preview: String,
+        messages_before: usize,
+    },
 }
 
 /// Information about an available model.

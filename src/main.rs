@@ -72,6 +72,7 @@ async fn main() -> Result<()> {
 
         if let Some(event) = rx.recv().await {
             let action = match event {
+                AppEvent::Key(key) if app.wants_raw_keys() => Action::RawKey(key),
                 AppEvent::Key(key) => resolve_key(key, app.mode(), app.focus()),
                 AppEvent::Resize(w, h) => Action::Resize(w, h),
                 AppEvent::Tick => Action::Tick,

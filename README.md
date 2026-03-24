@@ -12,7 +12,11 @@ A fast, keyboard-driven TUI for chatting with LLMs. Inspired by [lazygit](https:
 - **Real-time streaming** — Watch responses appear token by token
 - **Vim-like keybindings** — Normal, Insert, Visual, and Command modes
 - **Markdown rendering** — Syntax-highlighted code blocks in the terminal
-- **Conversation persistence** — Auto-saved to disk as JSON
+- **Conversation persistence** — Auto-saved to SQLite with full history
+- **Context management** — Reusable prompt/context files, budget-aware assembly
+- **Token tracking** — Per-turn and cumulative usage with cost calculation
+- **Context compaction** — Automatic summarization or truncation for long conversations
+- **MCP integration** — External tool use via Model Context Protocol
 - **Custom themes** — Full colour customisation via TOML theme files
 - **Configurable** — TOML config with sensible defaults
 - **Fast** — Built in Rust with async I/O
@@ -21,6 +25,9 @@ A fast, keyboard-driven TUI for chatting with LLMs. Inspired by [lazygit](https:
 
 | Document | Description |
 |----------|-------------|
+| [Architecture](docs/architecture.md) | Provider system, streaming, MCP, app structure |
+| [Context Management](docs/context.md) | Context assembly, compaction, token tracking, pricing |
+| [Data Storage](docs/storage.md) | SQLite schema, migrations, persistence lifecycle |
 | [UI Reference](docs/ui.md) | Layout, keybindings, commands, themes, and all UI configuration |
 
 ## Installation
@@ -98,26 +105,10 @@ lazyllm
 | `Esc` | Return to Normal mode |
 | `j` / `k` | Scroll down / up |
 
-## Layout
-
-```
-┌──────────────────────────────────────────┐
-│  Model: gpt-4o  Provider: openai  MCP: 0│
-├──────────┬───────────────────┬───────────┤
-│          │                   │           │
-│  Chat    │    Chat View      │   Tool    │
-│  List    │   (messages)      │   Panel   │
-│          │                   │           │
-├──────────┴───────────────────┴───────────┤
-│  > Type your message here...             │
-├──────────────────────────────────────────┤
-│  NORMAL                           ready  │
-└──────────────────────────────────────────┘
-```
 
 - **Chat List** (left) — Conversation history sidebar
 - **Chat View** (center) — Messages with markdown rendering
-- **Tool Panel** (right) — MCP tools (coming soon)
+- **Tool Panel** (right) — MCP tools
 - **Input Box** (bottom) — Press `i` to start typing, `Enter` to send
 - **Status Bar** — Current mode and status
 
@@ -133,6 +124,8 @@ default_provider = "openai"
 default_model = "gpt-4o"
 save_conversations = true
 data_dir = "~/.local/share/lazyllm"    # where conversations are stored
+system_prompt = "You are a helpful assistant."  # optional global system prompt
+# default_context = "rust-dev"         # optional default context file
 
 [ui]
 theme = "default"
@@ -140,6 +133,25 @@ show_tool_panel = true
 show_timestamps = false
 sidebar_width = 25
 tool_panel_width = 20
+
+[conversation]
+compaction_strategy = "auto"           # "auto", "none", "truncation", "summarization"
+compaction_threshold = 0.75            # usage fraction that triggers compaction
+recent_messages = 20                   # always keep this many recent messages
+budget_fraction = 0.80                 # fraction of context window to use
+
+[usage]
+show_token_usage = true
+show_cost = true
+show_context_usage = true
+# cost_warning_threshold = 0.50        # per-turn cost warning in USD
+
+[features]
+latex_rendering = true
+table_rendering = true
+search = true
+contexts = true
+mcp_servers = true
 
 # ── Providers ───────────────────────────────────────────
 
@@ -164,7 +176,7 @@ provider_type = "google"
 api_key_env = "GOOGLE_API_KEY"
 models = ["gemini-2.0-flash", "gemini-2.5-pro"]
 
-# ── MCP Servers (coming soon) ──────────────────────────
+# ── MCP Servers ───────────────────────────────────────
 
 [[mcp.servers]]
 name = "filesystem"
@@ -243,10 +255,11 @@ Providers without valid API keys are silently skipped at startup (check the log 
 | Path | Purpose |
 |------|---------|
 | `~/.config/lazyllm/config.toml` | Configuration |
-| `~/.local/share/lazyllm/conversations/` | Saved conversations (JSON) |
+| `~/.config/lazyllm/contexts/` | Context files (TOML) |
+| `~/.local/share/lazyllm/lazyllm.db` | SQLite database (conversations, messages, checkpoints) |
 | `~/.local/share/lazyllm/logs/lazyllm.log` | Debug log |
 
-Conversations are stored as individual JSON files (`{uuid}.json`) and auto-saved on every message send and on quit.
+Conversations are stored in SQLite and auto-saved on every message send and on quit. See [Data Storage](docs/storage.md) for schema details.
 
 ## Development
 
@@ -268,41 +281,59 @@ The project has 267+ tests covering all modules.
 
 ```
 src/
-├── main.rs            # Binary entry point, terminal setup
-├── lib.rs             # Library crate (for integration tests)
-├── app.rs             # Central state, action dispatch, streaming
+├── main.rs              # Binary entry point, terminal setup
+├── lib.rs               # Library crate (for integration tests)
+├── app.rs               # Central state, action dispatch, streaming
+├── command.rs           # CLI command parsing (:quit, :model, etc.)
+├── conversation.rs      # ConversationManager — persistence coordination
 ├── config/
-│   ├── mod.rs         # Config loading/saving
-│   └── types.rs       # AppConfig, ProviderConfig, etc.
+│   ├── mod.rs           # Config loading/saving
+│   └── types.rs         # AppConfig, ProviderConfig, ConversationConfig, etc.
+├── context/
+│   ├── mod.rs           # Load context TOML files
+│   └── types.rs         # Context, ContextFile
 ├── event/
-│   ├── mod.rs         # Event loop spawning
-│   ├── keybindings.rs # Key → Action mapping
-│   └── types.rs       # Action, Mode, FocusTarget enums
+│   ├── mod.rs           # Event loop spawning
+│   ├── keybindings.rs   # Key → Action mapping
+│   └── types.rs         # Action, Mode, FocusTarget enums
 ├── llm/
-│   ├── mod.rs         # LlmProvider trait, ProviderRegistry
-│   ├── types.rs       # Message, ChatRequest, StreamChunk
-│   ├── openai.rs      # OpenAI-compatible provider
-│   ├── anthropic.rs   # Anthropic Messages API
-│   ├── ollama.rs      # Ollama native API
-│   └── google.rs      # Google Gemini API
+│   ├── mod.rs           # LlmProvider trait, ProviderRegistry
+│   ├── types.rs         # Message, ChatRequest, StreamChunk, TokenUsage
+│   ├── openai.rs        # OpenAI-compatible provider
+│   ├── anthropic.rs     # Anthropic Messages API
+│   ├── ollama.rs        # Ollama native API
+│   ├── google.rs        # Google Gemini API
+│   ├── streaming.rs     # SSE stream parsing utilities
+│   ├── context.rs       # Budget-aware context assembly
+│   ├── compaction.rs    # Context compaction strategies
+│   ├── capabilities.rs  # Model context windows and feature flags
+│   └── pricing.rs       # Token pricing and cost calculation
 ├── markdown/
-│   └── mod.rs         # Markdown → TUI rendering
+│   ├── mod.rs           # Markdown → TUI rendering
+│   ├── latex.rs         # LaTeX to Unicode conversion
+│   └── tables.rs        # Table to box-drawing conversion
+├── mcp/
+│   ├── mod.rs           # Module exports
+│   ├── manager.rs       # McpManager — server lifecycle
+│   ├── client.rs        # McpClient — single server connection
+│   └── types.rs         # ToolInfo and related types
 ├── store/
-│   ├── mod.rs
-│   ├── types.rs       # Conversation, ConversationSummary
-│   └── json_store.rs  # JSON file persistence
+│   ├── mod.rs           # Store trait and StoreError
+│   ├── types.rs         # Conversation, ConversationSummary, Checkpoint
+│   └── sqlite_store.rs  # SQLite persistence backend
 └── ui/
-    ├── mod.rs         # Layout rendering
-    ├── theme.rs       # Theme loading and colour parsing
+    ├── mod.rs           # Layout rendering
+    ├── theme.rs         # Theme loading and colour parsing
     └── components/
-        ├── mod.rs         # Component trait
-        ├── chat_list.rs   # Conversation sidebar
-        ├── chat_view.rs   # Message display
-        ├── input_box.rs   # Text input
+        ├── mod.rs             # Component trait
+        ├── chat_list.rs       # Conversation sidebar
+        ├── chat_view.rs       # Message display
+        ├── input_box.rs       # Text input
         ├── model_selector.rs  # Provider/model bar
-        ├── status_bar.rs  # Mode + status
-        ├── tool_panel.rs  # MCP tools (placeholder)
-        └── help_overlay.rs # Keybinding reference
+        ├── status_bar.rs      # Mode + status
+        ├── tool_panel.rs      # MCP tools panel
+        ├── help_overlay.rs    # Keybinding reference
+        └── model_popup.rs     # Model/provider selection popup
 ```
 
 ## Roadmap
@@ -317,10 +348,10 @@ src/
 - [x] Interactive model/provider switcher
 - [x] MCP (Model Context Protocol) integration
 - [x] Clipboard copy support
-- [ ] Search within conversations
-- [ ] System prompt configuration
+- [x] Search within conversations
+- [x] System prompt configuration
 - [x] Token usage tracking
-- [ ] Conversation export
+- [x] Conversation export
 - [ ] Image/multimodal support
 
 ## License

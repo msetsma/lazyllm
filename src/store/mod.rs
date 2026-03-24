@@ -60,6 +60,15 @@ pub trait Store: Send + Sync {
     /// Remove oldest checkpoints beyond the max limit.
     fn prune_checkpoints(&self, conversation_id: Uuid, max: usize) -> Result<(), StoreError>;
 
+    /// Load the most recent checkpoint for a conversation.
+    fn latest_checkpoint(&self, conversation_id: Uuid) -> Result<Option<Checkpoint>, StoreError> {
+        let checkpoints = self.load_checkpoints(conversation_id)?;
+        Ok(checkpoints.into_iter().last())
+    }
+
+    /// Delete a specific checkpoint by ID.
+    fn delete_checkpoint(&self, checkpoint_id: i64) -> Result<(), StoreError>;
+
     /// Export a conversation as a JSON string.
     fn export_conversation(&self, id: Uuid) -> Result<String, StoreError>;
 

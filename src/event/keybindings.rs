@@ -49,6 +49,7 @@ fn resolve_normal_mode(key: KeyEvent, _focus: FocusTarget) -> Action {
         KeyCode::Char('m') => Action::ToggleModelSelector,
         KeyCode::Char('t') => Action::ToggleToolPanel,
         KeyCode::Char('?') => Action::ToggleHelp,
+        KeyCode::Char('P') => Action::TogglePulse,
         KeyCode::Char('l') | KeyCode::Right => Action::FocusNext,
         KeyCode::Char('h') | KeyCode::Left => Action::FocusPrev,
         _ => Action::None,

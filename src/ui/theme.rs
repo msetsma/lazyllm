@@ -55,6 +55,26 @@ pub struct Theme {
 
     // Popups
     pub popup_border: Color,
+
+    // Health states (Pulse)
+    pub health_fresh: Color,
+    pub health_working: Color,
+    pub health_warm: Color,
+    pub health_hot: Color,
+
+    // Budget bar segments (Pulse)
+    pub budget_system: Color,
+    pub budget_context: Color,
+    pub budget_tools: Color,
+    pub budget_compaction: Color,
+    pub budget_messages: Color,
+    pub budget_free: Color,
+
+    // Pulse overlay
+    pub pulse_border: Color,
+    pub pulse_section_title: Color,
+    pub pulse_pin_icon: Color,
+    pub pulse_note_border: Color,
 }
 
 impl Default for Theme {
@@ -98,6 +118,36 @@ impl Default for Theme {
             server_name: Color::Yellow,
 
             popup_border: Color::Cyan,
+
+            health_fresh: Color::Green,
+            health_working: Color::Cyan,
+            health_warm: Color::Yellow,
+            health_hot: Color::Red,
+
+            budget_system: Color::Magenta,
+            budget_context: Color::Cyan,
+            budget_tools: Color::Yellow,
+            budget_compaction: Color::DarkGray,
+            budget_messages: Color::Blue,
+            budget_free: Color::Rgb(60, 60, 60),
+
+            pulse_border: Color::Cyan,
+            pulse_section_title: Color::Yellow,
+            pulse_pin_icon: Color::Yellow,
+            pulse_note_border: Color::Magenta,
+        }
+    }
+}
+
+impl Theme {
+    /// Return the color for a given health state.
+    pub fn health_color(&self, state: &crate::llm::health::HealthState) -> Color {
+        use crate::llm::health::HealthState;
+        match state {
+            HealthState::Fresh => self.health_fresh,
+            HealthState::Working => self.health_working,
+            HealthState::Warm => self.health_warm,
+            HealthState::Hot => self.health_hot,
         }
     }
 }
@@ -151,6 +201,23 @@ pub struct ThemeConfig {
     pub server_name: Option<String>,
 
     pub popup_border: Option<String>,
+
+    pub health_fresh: Option<String>,
+    pub health_working: Option<String>,
+    pub health_warm: Option<String>,
+    pub health_hot: Option<String>,
+
+    pub budget_system: Option<String>,
+    pub budget_context: Option<String>,
+    pub budget_tools: Option<String>,
+    pub budget_compaction: Option<String>,
+    pub budget_messages: Option<String>,
+    pub budget_free: Option<String>,
+
+    pub pulse_border: Option<String>,
+    pub pulse_section_title: Option<String>,
+    pub pulse_pin_icon: Option<String>,
+    pub pulse_note_border: Option<String>,
 }
 
 impl ThemeConfig {
@@ -188,6 +255,20 @@ impl ThemeConfig {
             help_key: resolve_field(&self.help_key, d.help_key),
             server_name: resolve_field(&self.server_name, d.server_name),
             popup_border: resolve_field(&self.popup_border, d.popup_border),
+            health_fresh: resolve_field(&self.health_fresh, d.health_fresh),
+            health_working: resolve_field(&self.health_working, d.health_working),
+            health_warm: resolve_field(&self.health_warm, d.health_warm),
+            health_hot: resolve_field(&self.health_hot, d.health_hot),
+            budget_system: resolve_field(&self.budget_system, d.budget_system),
+            budget_context: resolve_field(&self.budget_context, d.budget_context),
+            budget_tools: resolve_field(&self.budget_tools, d.budget_tools),
+            budget_compaction: resolve_field(&self.budget_compaction, d.budget_compaction),
+            budget_messages: resolve_field(&self.budget_messages, d.budget_messages),
+            budget_free: resolve_field(&self.budget_free, d.budget_free),
+            pulse_border: resolve_field(&self.pulse_border, d.pulse_border),
+            pulse_section_title: resolve_field(&self.pulse_section_title, d.pulse_section_title),
+            pulse_pin_icon: resolve_field(&self.pulse_pin_icon, d.pulse_pin_icon),
+            pulse_note_border: resolve_field(&self.pulse_note_border, d.pulse_note_border),
         }
     }
 }

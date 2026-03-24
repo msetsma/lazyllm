@@ -9,6 +9,7 @@
 /// 5. Older messages (as many as fit in remaining budget)
 
 use crate::llm::capabilities::{estimate_message_tokens, estimate_tokens, ModelCapabilities};
+use crate::llm::health::HealthState;
 use crate::llm::types::Message;
 
 /// Configuration for context assembly.
@@ -32,6 +33,23 @@ impl Default for ContextConfig {
     }
 }
 
+/// Per-category token breakdown for context budget visualization.
+#[derive(Debug, Clone, Default)]
+pub struct ContextBudget {
+    pub system_prompt_tokens: u32,
+    pub context_files_tokens: u32,
+    pub tool_definitions_tokens: u32,
+    pub compaction_summary_tokens: u32,
+    pub pinned_messages_tokens: u32,
+    pub message_history_tokens: u32,
+    pub free_tokens: u32,
+    pub total_budget: u32,
+    pub context_window: u32,
+    pub usage_fraction: f32,
+    pub health: HealthState,
+    pub has_compaction_summary: bool,
+}
+
 /// Result of context assembly.
 #[derive(Debug)]
 pub struct AssembledContext {
@@ -45,9 +63,14 @@ pub struct AssembledContext {
     pub compaction_recommended: bool,
     /// Context usage as a fraction (0.0-1.0) of the context window.
     pub usage_fraction: f64,
+    /// Per-category token breakdown for the Pulse overlay.
+    pub budget: ContextBudget,
 }
 
 /// Assemble messages for an LLM request within the context budget.
+///
+/// Pinned message indices refer to positions in `conversation_messages`.
+/// Pinned messages are always included regardless of the recent window cutoff.
 pub fn assemble_context(
     system_messages: &[Message],
     context_messages: &[Message],
@@ -56,6 +79,7 @@ pub fn assemble_context(
     tool_count: usize,
     capabilities: &ModelCapabilities,
     config: &ContextConfig,
+    pinned_indices: &[usize],
 ) -> AssembledContext {
     let max_budget =
         (capabilities.context_window as f64 * config.budget_fraction) as u32;
@@ -78,7 +102,7 @@ pub fn assemble_context(
 
     let available = max_budget.saturating_sub(fixed_tokens + summary_tokens);
 
-    // 5. Split conversation messages: recent (always) + older (as budget allows)
+    // 5. Split conversation messages: recent (always) + pinned (always) + older (as budget allows)
     let total_msgs = conversation_messages.len();
     let recent_start = total_msgs.saturating_sub(config.recent_message_count);
     let recent = &conversation_messages[recent_start..];
@@ -86,12 +110,30 @@ pub fn assemble_context(
 
     let recent_tokens = estimate_message_tokens(recent);
 
+    // Identify pinned messages in the older region (pinned in recent are already included)
+    let pinned_older_indices: Vec<usize> = pinned_indices
+        .iter()
+        .copied()
+        .filter(|&idx| idx < recent_start && idx < total_msgs)
+        .collect();
+
+    let pinned_older_tokens: u32 = pinned_older_indices
+        .iter()
+        .map(|&idx| estimate_message_tokens(&[conversation_messages[idx].clone()]))
+        .sum();
+
     // Fill older messages from newest to oldest within remaining budget
-    let remaining = available.saturating_sub(recent_tokens);
+    // Pinned messages are always included (budget already reserved for them)
+    let remaining = available.saturating_sub(recent_tokens + pinned_older_tokens);
     let mut older_to_include = Vec::new();
     let mut older_tokens_used = 0u32;
 
-    for msg in older.iter().rev() {
+    for (i, msg) in older.iter().enumerate().rev() {
+        if pinned_older_indices.contains(&i) {
+            // Pinned — always include, tokens already accounted for
+            older_to_include.push(msg.clone());
+            continue;
+        }
         let msg_tokens = estimate_message_tokens(&[msg.clone()]);
         if older_tokens_used + msg_tokens > remaining {
             break;
@@ -119,9 +161,31 @@ pub fn assemble_context(
     messages.extend(older_to_include);
     messages.extend_from_slice(recent);
 
-    let estimated_tokens = fixed_tokens + summary_tokens + older_tokens_used + recent_tokens;
+    let message_history_tokens = older_tokens_used + recent_tokens + pinned_older_tokens;
+    let estimated_tokens = fixed_tokens + summary_tokens + message_history_tokens;
     let usage_fraction = estimated_tokens as f64 / capabilities.context_window as f64;
     let compaction_recommended = usage_fraction > 0.75;
+
+    let budget_usage_fraction = if max_budget > 0 {
+        estimated_tokens as f32 / max_budget as f32
+    } else {
+        1.0
+    };
+
+    let budget = ContextBudget {
+        system_prompt_tokens: system_tokens,
+        context_files_tokens: context_tokens,
+        tool_definitions_tokens: tool_tokens,
+        compaction_summary_tokens: summary_tokens,
+        pinned_messages_tokens: pinned_older_tokens,
+        message_history_tokens,
+        free_tokens: max_budget.saturating_sub(estimated_tokens),
+        total_budget: max_budget,
+        context_window: capabilities.context_window,
+        usage_fraction: budget_usage_fraction,
+        health: HealthState::from_usage(budget_usage_fraction),
+        has_compaction_summary: compaction_summary.is_some(),
+    };
 
     AssembledContext {
         messages,
@@ -129,6 +193,7 @@ pub fn assemble_context(
         dropped_count,
         compaction_recommended,
         usage_fraction,
+        budget,
     }
 }
 
@@ -167,7 +232,7 @@ mod tests {
     /// Ensures assembling an empty conversation produces no messages, tokens, or drops.
     #[test]
     fn empty_conversation() {
-        let result = assemble_context(&[], &[], &[], None, 0, &default_caps(), &config_with_recent(10));
+        let result = assemble_context(&[], &[], &[], None, 0, &default_caps(), &config_with_recent(10), &[]);
         assert!(result.messages.is_empty());
         assert_eq!(result.estimated_tokens, 0);
         assert_eq!(result.dropped_count, 0);
@@ -178,7 +243,7 @@ mod tests {
     fn system_prompt_always_included() {
         let system = vec![Message::system("You are helpful")];
         let msgs = vec![Message::user("hi")];
-        let result = assemble_context(&system, &[], &msgs, None, 0, &default_caps(), &config_with_recent(10));
+        let result = assemble_context(&system, &[], &msgs, None, 0, &default_caps(), &config_with_recent(10), &[]);
         assert_eq!(result.messages[0].content, "You are helpful");
         assert!(result.messages.len() >= 2);
     }
@@ -199,7 +264,7 @@ mod tests {
                 context_window: 100_000,
                 ..Default::default()
             },
-            &config_with_recent(10),
+            &config_with_recent(10), &[],
         );
         assert!(result.messages.len() >= 10);
         assert_eq!(result.messages.last().unwrap().content, "msg 29");
@@ -223,7 +288,7 @@ mod tests {
             Some("Earlier we discussed Rust programming"),
             0,
             &caps,
-            &config_with_recent(5),
+            &config_with_recent(5), &[],
         );
         let has_summary = result
             .messages
@@ -245,10 +310,10 @@ mod tests {
             ..Default::default()
         };
         let with_tools = assemble_context(
-            &[], &[], &msgs, None, 5, &caps, &config_with_recent(10),
+            &[], &[], &msgs, None, 5, &caps, &config_with_recent(10), &[],
         );
         let without_tools = assemble_context(
-            &[], &[], &msgs, None, 0, &caps, &config_with_recent(10),
+            &[], &[], &msgs, None, 0, &caps, &config_with_recent(10), &[],
         );
         assert!(with_tools.messages.len() <= without_tools.messages.len());
     }
@@ -270,7 +335,7 @@ mod tests {
         };
         let msgs = vec![Message::user("hello")];
         let result = assemble_context(
-            &[], &[], &msgs, None, 0, &caps, &ContextConfig::default(),
+            &[], &[], &msgs, None, 0, &caps, &ContextConfig::default(), &[],
         );
         assert!(result.usage_fraction > 0.0);
         assert!(result.usage_fraction < 0.01);
@@ -282,7 +347,7 @@ mod tests {
         let ctx = vec![Message::system("You are a Rust expert")];
         let msgs = vec![Message::user("help me")];
         let result = assemble_context(
-            &[], &ctx, &msgs, None, 0, &default_caps(), &config_with_recent(10),
+            &[], &ctx, &msgs, None, 0, &default_caps(), &config_with_recent(10), &[],
         );
         assert!(result.messages.iter().any(|m| m.content.contains("Rust expert")));
     }
@@ -296,7 +361,7 @@ mod tests {
         let result = assemble_context(
             &[], &[], &msgs, Some("old summary"), 0,
             &ModelCapabilities { context_window: 100_000, ..Default::default() },
-            &config_with_recent(10),
+            &config_with_recent(10), &[],
         );
         assert_eq!(result.dropped_count, 0);
         let has_summary = result.messages.iter().any(|m| m.content.contains("old summary"));
@@ -310,7 +375,7 @@ mod tests {
         let result = assemble_context(
             &[], &[], &msgs, None, 0,
             &ModelCapabilities { context_window: 100_000, ..Default::default() },
-            &config_with_recent(10),
+            &config_with_recent(10), &[],
         );
         assert!(!result.compaction_recommended);
     }
@@ -324,7 +389,7 @@ mod tests {
         let result = assemble_context(
             &[], &[], &msgs, None, 0,
             &ModelCapabilities { context_window: 100_000, ..Default::default() },
-            &config_with_recent(10),
+            &config_with_recent(10), &[],
         );
         assert_eq!(result.messages.len(), 30);
         assert_eq!(result.messages[0].content, "msg 0");
@@ -347,7 +412,7 @@ mod tests {
             Some("summary of earlier work"),
             0,
             &ModelCapabilities { context_window: 100_000, ..Default::default() },
-            &config_with_recent(10),
+            &config_with_recent(10), &[],
         );
         assert_eq!(result.dropped_count, 0);
         let has_summary = result.messages.iter().any(|m| m.content.contains("summary of earlier work"));
@@ -374,7 +439,7 @@ mod tests {
             Some("dropped context summary"),
             0,
             &caps,
-            &config_with_recent(5),
+            &config_with_recent(5), &[],
         );
         assert!(result.dropped_count > 0);
         let has_summary = result.messages.iter().any(|m| m.content.contains("dropped context summary"));
@@ -412,7 +477,7 @@ mod tests {
             None,
             0,
             &default_caps(),
-            &config,
+            &config, &[],
         );
         // With zero budget, recent messages are still "included" by the slice logic,
         // but the budget math means estimated_tokens can exceed the 0 budget.
@@ -439,7 +504,7 @@ mod tests {
             None,
             7,
             &caps,
-            &config_with_recent(5),
+            &config_with_recent(5), &[],
         );
         // Tool overhead alone is 700 tokens; very few (if any) older messages should fit.
         assert!(result.estimated_tokens >= 700);
@@ -460,7 +525,7 @@ mod tests {
             None,
             0,
             &ModelCapabilities { context_window: 100_000, ..Default::default() },
-            &config_with_recent(10),
+            &config_with_recent(10), &[],
         );
         assert_eq!(result.messages.len(), 5);
         assert_eq!(result.dropped_count, 0);
@@ -479,7 +544,7 @@ mod tests {
             None,
             0,
             &default_caps(),
-            &config_with_recent(10),
+            &config_with_recent(10), &[],
         );
         assert_eq!(result.messages.len(), 1);
         assert_eq!(result.messages[0].content, "only message");
@@ -499,11 +564,49 @@ mod tests {
             None,
             0,
             &default_caps(),
-            &config_with_recent(10),
+            &config_with_recent(10), &[],
         );
         assert_eq!(result.messages.len(), 3);
         assert_eq!(result.messages[0].content, "system prompt");
         assert_eq!(result.messages[1].content, "context info");
         assert_eq!(result.messages[2].content, "user question");
+    }
+
+    /// Verifies pinned messages in the older region are always included even when budget is tight.
+    #[test]
+    fn pinned_messages_survive_budget_cuts() {
+        let msgs: Vec<Message> = (0..30)
+            .map(|i| Message::user(format!("msg {i}")))
+            .collect();
+        let caps = ModelCapabilities {
+            context_window: 500,
+            max_output: 100,
+            ..Default::default()
+        };
+        // Pin message at index 2 (in the older region with recent_count=10)
+        let result = assemble_context(
+            &[], &[], &msgs, None, 0, &caps, &config_with_recent(10), &[2],
+        );
+        // msg 2 should be present even if other older messages were dropped
+        assert!(
+            result.messages.iter().any(|m| m.content == "msg 2"),
+            "pinned message should survive budget cuts"
+        );
+        assert!(result.budget.pinned_messages_tokens > 0);
+    }
+
+    /// Verifies pinned indices outside conversation bounds are ignored.
+    #[test]
+    fn pinned_indices_out_of_bounds_ignored() {
+        let msgs: Vec<Message> = (0..5)
+            .map(|i| Message::user(format!("msg {i}")))
+            .collect();
+        let result = assemble_context(
+            &[], &[], &msgs, None, 0,
+            &ModelCapabilities { context_window: 100_000, ..Default::default() },
+            &config_with_recent(10), &[99, 100],
+        );
+        assert_eq!(result.messages.len(), 5);
+        assert_eq!(result.budget.pinned_messages_tokens, 0);
     }
 }

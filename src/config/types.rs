@@ -82,6 +82,16 @@ impl AppConfig {
             ));
         }
 
+        // conversation.compaction_mode
+        let valid_modes = ["auto", "client", "server"];
+        if !valid_modes.contains(&self.conversation.compaction_mode.as_str()) {
+            errors.push(format!(
+                "conversation.compaction_mode = \"{}\" is invalid (must be one of: {})",
+                self.conversation.compaction_mode,
+                valid_modes.join(", ")
+            ));
+        }
+
         // conversation.budget_fraction: 0.1–1.0
         if !(0.1..=1.0).contains(&self.conversation.budget_fraction) {
             errors.push(format!(
@@ -261,6 +271,10 @@ pub struct ConversationConfig {
     /// Budget fraction of context window to use (0.0–1.0).
     #[serde(default = "default_budget_fraction")]
     pub budget_fraction: f64,
+    /// Compaction mode: "client", "server", or "auto" (default).
+    /// "auto" uses server-side for Anthropic, client-side for everything else.
+    #[serde(default = "default_compaction_mode")]
+    pub compaction_mode: String,
 }
 
 impl Default for ConversationConfig {
@@ -271,6 +285,7 @@ impl Default for ConversationConfig {
             recent_messages: default_recent_messages(),
             max_checkpoints: default_max_checkpoints(),
             budget_fraction: default_budget_fraction(),
+            compaction_mode: default_compaction_mode(),
         }
     }
 }
@@ -293,6 +308,10 @@ fn default_max_checkpoints() -> usize {
 
 fn default_budget_fraction() -> f64 {
     0.80
+}
+
+fn default_compaction_mode() -> String {
+    "auto".to_string()
 }
 
 /// Usage tracking and cost display settings.

@@ -60,6 +60,8 @@ pub fn render(app: &App, frame: &mut Frame) {
     app.tool_panel.render(frame, size, false, theme);
     app.help_overlay.render(frame, size, false, theme);
     app.model_popup.render(frame, size, false, theme);
+    app.pulse_overlay.render(frame, size, false, theme);
+    app.notes_editor.render(frame, size, theme);
 }
 
 /// Convert a ratatui Buffer to a human-readable string for snapshot testing.

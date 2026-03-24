@@ -28,6 +28,12 @@ pub struct Conversation {
     pub turn_count: u32,
     #[serde(default)]
     pub context_estimate: u32,
+    #[serde(default)]
+    pub pinned_messages: Vec<usize>,
+    #[serde(default)]
+    pub session_notes: Option<String>,
+    #[serde(default)]
+    pub compaction_history: Vec<CompactionEvent>,
 }
 
 impl Conversation {
@@ -48,6 +54,9 @@ impl Conversation {
             total_cost: 0.0,
             turn_count: 0,
             context_estimate: 0,
+            pinned_messages: Vec::new(),
+            session_notes: None,
+            compaction_history: Vec::new(),
         }
     }
 
@@ -141,6 +150,27 @@ pub struct MessageUsage {
     pub cost: Option<f64>,
     pub duration_ms: Option<u64>,
     pub model: Option<String>,
+}
+
+/// Mode used for a compaction event.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CompactionMode {
+    Truncation,
+    Summarization,
+    Server,
+    ToolClearing,
+}
+
+/// Record of a single compaction event within a conversation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CompactionEvent {
+    pub timestamp: DateTime<Utc>,
+    pub mode: CompactionMode,
+    pub summary_preview: String,
+    pub messages_before: usize,
+    pub messages_dropped: usize,
+    pub tokens_reclaimed: u32,
+    pub checkpoint_id: Option<i64>,
 }
 
 #[cfg(test)]
@@ -250,5 +280,92 @@ mod tests {
         assert_eq!(parsed.title, conv.title);
         assert_eq!(parsed.messages.len(), conv.messages.len());
         assert_eq!(parsed.id, conv.id);
+    }
+
+    /// New conversations have empty pulse fields by default.
+    #[test]
+    fn new_conversation_has_empty_pulse_fields() {
+        let conv = Conversation::new("openai".to_string(), "gpt-4o".to_string());
+        assert!(conv.pinned_messages.is_empty());
+        assert!(conv.session_notes.is_none());
+        assert!(conv.compaction_history.is_empty());
+    }
+
+    /// CompactionMode survives a JSON serialization roundtrip.
+    #[test]
+    fn compaction_mode_serde_roundtrip() {
+        for mode in [
+            CompactionMode::Truncation,
+            CompactionMode::Summarization,
+            CompactionMode::Server,
+            CompactionMode::ToolClearing,
+        ] {
+            let json = serde_json::to_string(&mode).unwrap();
+            let parsed: CompactionMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, mode);
+        }
+    }
+
+    /// CompactionEvent survives a JSON serialization roundtrip.
+    #[test]
+    fn compaction_event_serde_roundtrip() {
+        let event = CompactionEvent {
+            timestamp: Utc::now(),
+            mode: CompactionMode::Summarization,
+            summary_preview: "Discussed auth refactoring...".to_string(),
+            messages_before: 40,
+            messages_dropped: 20,
+            tokens_reclaimed: 15000,
+            checkpoint_id: Some(3),
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: CompactionEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.mode, CompactionMode::Summarization);
+        assert_eq!(parsed.messages_dropped, 20);
+        assert_eq!(parsed.tokens_reclaimed, 15000);
+        assert_eq!(parsed.checkpoint_id, Some(3));
+    }
+
+    /// Conversation with pulse fields survives JSON roundtrip.
+    #[test]
+    fn conversation_with_pulse_fields_roundtrip() {
+        let mut conv = Conversation::new("anthropic".to_string(), "claude".to_string());
+        conv.pinned_messages = vec![2, 5, 8];
+        conv.session_notes = Some("Working on auth layer".to_string());
+        conv.compaction_history.push(CompactionEvent {
+            timestamp: Utc::now(),
+            mode: CompactionMode::Server,
+            summary_preview: "Server compacted".to_string(),
+            messages_before: 30,
+            messages_dropped: 15,
+            tokens_reclaimed: 10000,
+            checkpoint_id: None,
+        });
+
+        let json = serde_json::to_string(&conv).unwrap();
+        let parsed: Conversation = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.pinned_messages, vec![2, 5, 8]);
+        assert_eq!(parsed.session_notes.as_deref(), Some("Working on auth layer"));
+        assert_eq!(parsed.compaction_history.len(), 1);
+        assert_eq!(parsed.compaction_history[0].mode, CompactionMode::Server);
+    }
+
+    /// Deserializing old JSON without pulse fields uses defaults.
+    #[test]
+    fn old_conversation_json_deserializes_with_defaults() {
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000001",
+            "title": "Old Chat",
+            "messages": [],
+            "model": "gpt-4o",
+            "provider": "openai",
+            "created_at": "2025-01-01T00:00:00Z",
+            "updated_at": "2025-01-01T00:00:00Z"
+        }"#;
+        let conv: Conversation = serde_json::from_str(json).unwrap();
+        assert!(conv.pinned_messages.is_empty());
+        assert!(conv.session_notes.is_none());
+        assert!(conv.compaction_history.is_empty());
     }
 }

@@ -10,7 +10,7 @@ use crate::conversation::ConversationManager;
 use crate::event::types::{Action, FocusTarget, Mode};
 use crate::llm::ProviderRegistry;
 use crate::llm::capabilities;
-use crate::llm::compaction;
+use crate::llm::compaction::{self, PipelineResult};
 use crate::llm::context;
 use crate::llm::pricing;
 use crate::llm::types::{ChatRequest, Message, StreamChunk, ToolCall, TokenUsage};
@@ -23,6 +23,8 @@ use crate::ui::components::help_overlay::HelpOverlay;
 use crate::ui::components::input_box::InputBox;
 use crate::ui::components::model_popup::ModelPopup;
 use crate::ui::components::model_selector::ModelSelector;
+use crate::ui::components::notes_editor::NotesEditor;
+use crate::ui::components::pulse_overlay::PulseOverlay;
 use crate::ui::components::status_bar::StatusBar;
 use crate::ui::components::tool_panel::ToolPanel;
 use crate::ui::components::Component;
@@ -54,6 +56,7 @@ pub struct App {
 
     // Context management
     pub(crate) compaction_summary: Option<String>,
+    pub(crate) compaction_rx: Option<mpsc::UnboundedReceiver<PipelineResult>>,
 
     // Persistence
     pub(crate) conversations: ConversationManager,
@@ -67,6 +70,8 @@ pub struct App {
     pub(crate) tool_panel: ToolPanel,
     pub(crate) help_overlay: HelpOverlay,
     pub(crate) model_popup: ModelPopup,
+    pub(crate) pulse_overlay: PulseOverlay,
+    pub(crate) notes_editor: NotesEditor,
 }
 
 impl App {
@@ -85,6 +90,12 @@ impl App {
 
     pub fn focus(&self) -> FocusTarget {
         self.focus
+    }
+
+    /// Returns true when an overlay is visible that needs raw key events
+    /// instead of resolved actions.
+    pub fn wants_raw_keys(&self) -> bool {
+        self.pulse_overlay.visible || self.notes_editor.visible
     }
 }
 
@@ -139,6 +150,7 @@ impl App {
             last_usage: None,
             session_usage: TokenUsage::default(),
             compaction_summary: None,
+            compaction_rx: None,
             conversations: ConversationManager::new(),
             chat_list: ChatList::new(),
             chat_view,
@@ -148,6 +160,8 @@ impl App {
             tool_panel: ToolPanel::new(),
             help_overlay: HelpOverlay::new(),
             model_popup: ModelPopup::new(),
+            pulse_overlay: PulseOverlay::new(),
+            notes_editor: NotesEditor::new(),
         }
     }
 
@@ -287,6 +301,47 @@ impl App {
 
     /// Process an action. Returns quickly; LLM streaming happens in background.
     pub async fn update(&mut self, action: Action) {
+        // Raw key interception for overlays that need their own key mapping
+        if let Action::RawKey(key_event) = action {
+            use crate::ui::components::notes_editor::NotesAction;
+
+            // Notes editor takes priority (topmost popup)
+            if self.notes_editor.visible {
+                match self.notes_editor.handle_key(key_event) {
+                    NotesAction::Save => {
+                        let notes = self.notes_editor.close_save();
+                        if let Some(conv) = &mut self.conversations.active_conversation {
+                            conv.session_notes =
+                                if notes.is_empty() { None } else { Some(notes) };
+                        }
+                        self.save_active_conversation();
+                        self.refresh_pulse_data();
+                    }
+                    NotesAction::Discard => {
+                        self.notes_editor.close_discard();
+                    }
+                    NotesAction::Continue => {}
+                }
+                return;
+            }
+
+            // Pulse overlay intercepts all keys when visible
+            if self.pulse_overlay.visible {
+                if let Some(overlay_action) = self.pulse_overlay.handle_key(key_event) {
+                    // Recurse with the resolved action so the main dispatch handles it
+                    Box::pin(self.update(overlay_action)).await;
+                }
+                return;
+            }
+
+            // Shouldn't happen (wants_raw_keys was true but no overlay visible),
+            // but fall through to resolve normally just in case
+            let resolved =
+                crate::event::keybindings::resolve_key(key_event, self.mode, self.focus);
+            Box::pin(self.update(resolved)).await;
+            return;
+        }
+
         if self.model_popup.visible && self.handle_popup_action(&action) {
             return;
         }
@@ -456,8 +511,75 @@ impl App {
             }
             Action::Tick => {
                 self.drain_stream_chunks();
+                self.drain_compaction_result();
             }
-            Action::Resize(_, _) | Action::None => {}
+            Action::TogglePulse => {
+                self.pulse_overlay.visible = !self.pulse_overlay.visible;
+                if self.pulse_overlay.visible {
+                    self.refresh_pulse_data();
+                }
+            }
+            Action::PulseCompact => {
+                self.spawn_compaction(None);
+                self.refresh_pulse_data();
+            }
+            Action::PulseCompactWithPrompt => {
+                self.pulse_overlay.visible = false;
+                self.mode = Mode::Command;
+                self.input_box.set_content("compact ");
+                self.focus = FocusTarget::Input;
+                self.status_bar.handle_action(&Action::SwitchMode(Mode::Command));
+            }
+            Action::PulseClearToolResults => {
+                if let Some(conv) = &mut self.conversations.active_conversation {
+                    let pinned = conv.pinned_messages.clone();
+                    let result = compaction::clear_old_tool_results(
+                        &mut conv.messages, 3, &pinned,
+                    );
+                    self.status_bar.set_status(format!(
+                        "Cleared {} tool results, reclaimed ~{}k tokens",
+                        result.cleared_count, result.tokens_reclaimed / 1000,
+                    ));
+                }
+                self.refresh_pulse_data();
+            }
+            Action::PulseUndoCompaction => {
+                self.restore_checkpoint(None);
+                self.refresh_pulse_data();
+                self.status_bar.set_status("Restored from last checkpoint".to_string());
+            }
+            Action::PulseTogglePin => {
+                if let Some(conv) = &mut self.conversations.active_conversation {
+                    let idx = self.chat_view.selected_message_index();
+                    if let Some(pos) = conv.pinned_messages.iter().position(|&i| i == idx) {
+                        conv.pinned_messages.remove(pos);
+                    } else {
+                        conv.pinned_messages.push(idx);
+                    }
+                }
+                self.save_active_conversation();
+                self.refresh_pulse_data();
+            }
+            Action::PulseEditNotes => {
+                let notes = self.conversations.active_conversation
+                    .as_ref()
+                    .and_then(|c| c.session_notes.as_deref())
+                    .unwrap_or("");
+                self.notes_editor.open(notes);
+            }
+            Action::PulseSwitchMode => {
+                let current = &self.config.conversation.compaction_mode;
+                let next = match current.as_str() {
+                    "auto" => "client",
+                    "client" => "server",
+                    "server" => "auto",
+                    _ => "auto",
+                };
+                self.config.conversation.compaction_mode = next.to_string();
+                self.refresh_pulse_data();
+                self.status_bar.set_status(format!("Compaction mode: {next}"));
+            }
+            Action::Resize(_, _) | Action::None | Action::RawKey(_) => {}
         }
     }
 
@@ -600,8 +722,8 @@ impl App {
             Command::Spend => {
                 self.show_spend();
             }
-            Command::Compact => {
-                self.compact_conversation();
+            Command::Compact(custom) => {
+                self.spawn_compaction(custom);
             }
             Command::Checkpoints => {
                 self.show_checkpoints();
@@ -611,6 +733,32 @@ impl App {
             }
             Command::Set(key, value) => {
                 self.set_config(&key, &value);
+            }
+            Command::Pulse => {
+                self.pulse_overlay.visible = !self.pulse_overlay.visible;
+                if self.pulse_overlay.visible {
+                    self.refresh_pulse_data();
+                }
+            }
+            Command::EditSessionNotes => {
+                let notes = self.conversations.active_conversation
+                    .as_ref()
+                    .and_then(|c| c.session_notes.as_deref())
+                    .unwrap_or("");
+                self.notes_editor.open(notes);
+            }
+            Command::TogglePin => {
+                if let Some(conv) = &mut self.conversations.active_conversation {
+                    let idx = self.chat_view.selected_message_index();
+                    if let Some(pos) = conv.pinned_messages.iter().position(|&i| i == idx) {
+                        conv.pinned_messages.remove(pos);
+                        self.status_bar.set_status(format!("Unpinned message #{idx}"));
+                    } else {
+                        conv.pinned_messages.push(idx);
+                        self.status_bar.set_status(format!("Pinned message #{idx}"));
+                    }
+                }
+                self.save_active_conversation();
             }
             Command::Unknown(cmd) => {
                 self.status_bar
@@ -920,8 +1068,98 @@ impl App {
         }
     }
 
-    /// Compact the active conversation by truncating/summarizing older messages.
-    fn compact_conversation(&mut self) {
+    /// Refresh data shown in the Pulse overlay and status bar health indicator.
+    fn refresh_pulse_data(&mut self) {
+        use crate::llm::context::ContextBudget;
+        use crate::llm::health::HealthState;
+        use crate::ui::components::pulse_overlay::{PulseStats, PinnedPreview};
+
+        let Some(conv) = &self.conversations.active_conversation else { return };
+
+        // Build a lightweight budget from the last known context estimate
+        let usage_fraction = if conv.context_estimate > 0 {
+            let model = format!(
+                "{}/{}",
+                self.config.general.default_provider,
+                self.config.general.default_model
+            );
+            let caps = capabilities::get_capabilities(&model);
+            let budget = (caps.context_window as f64 * self.config.conversation.budget_fraction) as u32;
+            if budget > 0 {
+                conv.context_estimate as f32 / budget as f32
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        let budget = ContextBudget {
+            usage_fraction,
+            health: HealthState::from_usage(usage_fraction),
+            has_compaction_summary: self.compaction_summary.is_some(),
+            ..Default::default()
+        };
+
+        let turn_count = conv.messages.len() as u32 / 2; // rough estimate
+        let stats = PulseStats {
+            turn_count,
+            total_input_tokens: self.session_usage.input_tokens,
+            total_output_tokens: self.session_usage.output_tokens,
+            total_cost: self.session_usage.cost,
+            cache_hit_rate: if self.session_usage.input_tokens > 0 {
+                Some(
+                    self.session_usage.cache_read_tokens as f32
+                        / self.session_usage.input_tokens as f32,
+                )
+            } else {
+                None
+            },
+            est_cost_per_message: if turn_count > 0 {
+                self.session_usage.cost / turn_count as f64
+            } else {
+                0.0
+            },
+            compaction_count: conv.compaction_history.len(),
+            dropped_message_count: conv
+                .compaction_history
+                .iter()
+                .map(|e| e.messages_dropped)
+                .sum(),
+        };
+
+        let pinned = conv
+            .pinned_messages
+            .iter()
+            .filter_map(|&idx| {
+                conv.messages.get(idx).map(|m| PinnedPreview {
+                    message_index: idx,
+                    role: m.role.as_str().to_string(),
+                    preview: m.content.chars().take(60).collect(),
+                })
+            })
+            .collect();
+
+        let health = budget.health;
+        let has_summary = budget.has_compaction_summary;
+
+        self.pulse_overlay.refresh(
+            budget,
+            stats,
+            pinned,
+            conv.session_notes.clone().unwrap_or_default(),
+            conv.compaction_history.clone(),
+            self.config.conversation.compaction_mode.clone(),
+        );
+
+        // Update status bar health
+        self.status_bar.health_state = Some(health);
+        self.status_bar.usage_pct = Some((usage_fraction * 100.0) as u32);
+        self.status_bar.has_compaction_summary = has_summary;
+    }
+
+    /// Spawn an async compaction pipeline for the active conversation.
+    fn spawn_compaction(&mut self, custom_instructions: Option<String>) {
         let conv = match &self.conversations.active_conversation {
             Some(c) => c,
             None => {
@@ -931,8 +1169,28 @@ impl App {
             }
         };
 
-        let recent_count = self.config.conversation.recent_messages;
-        if conv.messages.len() <= recent_count {
+        if self.compaction_rx.is_some() {
+            self.status_bar
+                .set_status("Compaction already in progress".to_string());
+            return;
+        }
+
+        let provider_name = &self.config.general.default_provider;
+        let model_name = &self.config.general.default_model;
+        let model_key = format!("{provider_name}/{model_name}");
+        let caps = capabilities::get_capabilities(&model_key);
+        let overrides = compaction::ProfileOverrides::from_config(&self.config.conversation);
+        let profile = compaction::derive_profile(&caps, provider_name, &overrides);
+
+        if profile.pipeline.is_empty()
+            || profile.pipeline == vec![compaction::CompactionStrategy::None]
+        {
+            self.status_bar
+                .set_status("Compaction disabled".to_string());
+            return;
+        }
+
+        if conv.messages.len() <= profile.recent_messages {
             self.status_bar
                 .set_status("Conversation too short to compact".to_string());
             return;
@@ -947,38 +1205,163 @@ impl App {
             let _ = store.prune_checkpoints(conv.id, max_checkpoints);
         }
 
-        let strategy_str = &self.config.conversation.compaction_strategy;
-        let strategy = if strategy_str == "auto" {
-            compaction::auto_select_strategy(&self.config.general.default_provider)
-        } else {
-            compaction::CompactionStrategy::from_str(strategy_str)
-        };
+        let messages = conv.messages.clone();
+        let pinned = conv.pinned_messages.clone();
+        let registry = Arc::clone(&self.registry);
+        let provider_name_owned = provider_name.clone();
+        let model_name_owned = model_name.clone();
 
-        let result = match strategy {
-            compaction::CompactionStrategy::None => {
-                self.status_bar
-                    .set_status("Compaction disabled".to_string());
-                return;
-            }
-            compaction::CompactionStrategy::Truncation => {
-                compaction::truncate_messages(&conv.messages, recent_count)
-            }
-            compaction::CompactionStrategy::ClientSummarization => {
-                // TODO: For now, fall back to truncation. Full summarization requires
-                // an async LLM call which would need to be handled via streaming.
-                compaction::truncate_messages(&conv.messages, recent_count)
-            }
-        };
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.compaction_rx = Some(rx);
+        self.status_bar.set_status("Compacting...".to_string());
 
-        // Apply compaction
-        self.compaction_summary = result.summary.clone();
-        if let Some(conv) = &mut self.conversations.active_conversation {
-            conv.messages = result.messages;
-            conv.updated_at = chrono::Utc::now();
+        tokio::spawn(async move {
+            let provider_ref = registry.get(&provider_name_owned);
+            let provider_arg: Option<(&dyn crate::llm::LlmProvider, &str)> =
+                provider_ref.map(|p| (p, model_name_owned.as_str()));
+
+            let result = compaction::run_compaction_pipeline(
+                &messages,
+                &pinned,
+                &profile,
+                &caps,
+                provider_arg,
+                custom_instructions.as_deref(),
+            )
+            .await;
+
+            match result {
+                Ok(pipeline_result) => {
+                    tx.send(pipeline_result).ok();
+                }
+                Err(e) => {
+                    tracing::error!("Compaction pipeline failed: {e}");
+                    // Send a minimal result with no changes so the UI can recover
+                    tx.send(PipelineResult {
+                        messages,
+                        summary: None,
+                        total_removed: 0,
+                        total_tokens_reclaimed: 0,
+                        steps_applied: vec![],
+                    })
+                    .ok();
+                }
+            }
+        });
+    }
+
+    /// Check if auto-compaction should trigger after a streaming response.
+    fn should_auto_compact(&self) -> bool {
+        if self.config.conversation.compaction_strategy == "none" {
+            return false;
         }
+        if self.compaction_rx.is_some() {
+            return false;
+        }
+        let conv = match &self.conversations.active_conversation {
+            Some(c) => c,
+            None => return false,
+        };
+
+        let provider_name = &self.config.general.default_provider;
+        let model_name = &self.config.general.default_model;
+        let model_key = format!("{provider_name}/{model_name}");
+        let caps = capabilities::get_capabilities(&model_key);
+        let overrides = compaction::ProfileOverrides::from_config(&self.config.conversation);
+        let profile = compaction::derive_profile(&caps, provider_name, &overrides);
+
+        if conv.messages.len() <= profile.recent_messages {
+            return false;
+        }
+
+        // Estimate current usage fraction
+        let est_tokens = capabilities::estimate_message_tokens(&conv.messages);
+        let budget = (caps.context_window as f64 * self.config.conversation.budget_fraction) as u32;
+        if budget == 0 {
+            return false;
+        }
+        let usage_fraction = est_tokens as f64 / budget as f64;
+        usage_fraction >= profile.trigger_threshold
+    }
+
+    /// Drain a completed compaction result and apply it to the conversation.
+    fn drain_compaction_result(&mut self) {
+        let rx = match self.compaction_rx.as_mut() {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        let result = match rx.try_recv() {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        self.compaction_rx = None;
+
+        // Verify we still have the same conversation
+        let conv = match &mut self.conversations.active_conversation {
+            Some(c) => c,
+            None => return,
+        };
+
+        let messages_before = conv.messages.len();
+
+        if result.total_removed == 0 && result.steps_applied.is_empty() {
+            self.status_bar
+                .set_status("Compaction: no changes needed".to_string());
+            return;
+        }
+
+        // Apply compaction result
+        self.compaction_summary = result.summary.clone();
+        conv.messages = result.messages;
+        conv.updated_at = chrono::Utc::now();
+
+        // Record compaction event
+        let mode = result
+            .steps_applied
+            .last()
+            .copied()
+            .unwrap_or(crate::store::types::CompactionMode::Truncation);
+        conv.compaction_history.push(crate::store::types::CompactionEvent {
+            timestamp: chrono::Utc::now(),
+            mode,
+            summary_preview: result
+                .summary
+                .as_deref()
+                .unwrap_or("")
+                .chars()
+                .take(100)
+                .collect(),
+            messages_before,
+            messages_dropped: result.total_removed,
+            tokens_reclaimed: result.total_tokens_reclaimed,
+            checkpoint_id: None,
+        });
+
         self.save_active_conversation();
 
         // Refresh chat view
+        self.refresh_chat_view();
+
+        // Refresh status bar health and pulse data
+        self.refresh_pulse_data();
+
+        let steps: Vec<&str> = result.steps_applied.iter().map(|s| match s {
+            crate::store::types::CompactionMode::ToolClearing => "tool clearing",
+            crate::store::types::CompactionMode::Truncation => "truncation",
+            crate::store::types::CompactionMode::Summarization => "summarization",
+            crate::store::types::CompactionMode::Server => "server",
+        }).collect();
+
+        self.status_bar.set_status(format!(
+            "Compacted: removed {} messages ({})",
+            result.total_removed,
+            steps.join(" + "),
+        ));
+    }
+
+    /// Refresh the chat view from the active conversation's messages.
+    fn refresh_chat_view(&mut self) {
         self.chat_view.clear();
         if let Some(conv) = &self.conversations.active_conversation {
             for msg in &conv.messages {
@@ -994,12 +1377,6 @@ impl App {
                 });
             }
         }
-
-        self.status_bar.set_status(format!(
-            "Compacted: removed {} messages (strategy: {})",
-            result.removed_count,
-            strategy.as_str()
-        ));
     }
 
     /// Show checkpoints for the active conversation.
@@ -1115,34 +1492,29 @@ impl App {
             }
         };
 
+        let cp_id = checkpoint.id;
+
         // Restore messages
         if let Some(conv) = &mut self.conversations.active_conversation {
             conv.messages = messages;
             conv.updated_at = chrono::Utc::now();
+            // Remove the most recent compaction history entry (the one we're undoing)
+            conv.compaction_history.pop();
         }
         self.compaction_summary = None;
         self.save_active_conversation();
 
-        // Refresh chat view
-        self.chat_view.clear();
-        if let Some(conv) = &self.conversations.active_conversation {
-            for msg in &conv.messages {
-                let role = match msg.role {
-                    crate::llm::types::Role::User => MessageRole::User,
-                    crate::llm::types::Role::Assistant => MessageRole::Assistant,
-                    _ => MessageRole::System,
-                };
-                self.chat_view.add_message(ChatMessage {
-                    role,
-                    content: msg.content.clone(),
-                    timestamp: None,
-                });
-            }
+        // Delete the consumed checkpoint
+        if let Some(store) = &self.conversations.store {
+            let _ = store.delete_checkpoint(cp_id);
         }
 
+        // Refresh chat view and status bar health
+        self.refresh_chat_view();
+        self.refresh_pulse_data();
+
         self.status_bar.set_status(format!(
-            "Restored checkpoint #{}",
-            checkpoint.id
+            "Restored checkpoint #{cp_id}"
         ));
     }
 
@@ -1272,13 +1644,21 @@ impl App {
             .map(|m| m.tool_definitions())
             .unwrap_or_default();
 
-        // Budget-aware context assembly using config settings
+        // Budget-aware context assembly using profile-derived settings
         let caps = capabilities::get_capabilities(&model);
+        let overrides = compaction::ProfileOverrides::from_config(&self.config.conversation);
+        let profile = compaction::derive_profile(&caps, provider_name, &overrides);
         let ctx_config = context::ContextConfig {
-            recent_message_count: self.config.conversation.recent_messages,
+            recent_message_count: profile.recent_messages,
             budget_fraction: self.config.conversation.budget_fraction,
             ..context::ContextConfig::default()
         };
+        let pinned = self
+            .conversations
+            .active_conversation
+            .as_ref()
+            .map(|c| c.pinned_messages.as_slice())
+            .unwrap_or(&[]);
         let assembled = context::assemble_context(
             &system_messages,
             &context_messages,
@@ -1287,6 +1667,7 @@ impl App {
             tool_defs.len(),
             &caps,
             &ctx_config,
+            pinned,
         );
 
         // Update context estimate on the conversation
@@ -1468,6 +1849,16 @@ impl App {
                         .append_to_last(&format!("\n[{prefix}: {preview}]"));
                     self.status_bar.set_status("streaming...".to_string());
                 }
+                Ok(StreamChunk::CompactionOccurred { summary_preview, messages_before }) => {
+                    tracing::info!(
+                        "Server compacted: {messages_before} messages → summary"
+                    );
+                    self.status_bar.set_status(format!(
+                        "Server compacted: {messages_before} msgs → summary"
+                    ));
+                    // Store as compaction summary for context assembly
+                    self.compaction_summary = Some(summary_preview);
+                }
                 Ok(StreamChunk::Done) => {
                     self.finish_streaming();
                     break;
@@ -1586,6 +1977,11 @@ impl App {
             "ready".to_string()
         };
         self.status_bar.set_status(status);
+
+        // Check if auto-compaction should trigger
+        if self.should_auto_compact() {
+            self.spawn_compaction(None);
+        }
     }
 
     fn dispatch_to_focused(&mut self, action: &Action) {
@@ -2338,7 +2734,7 @@ mod tests {
             app.conversations.add_message(Message::user(format!("msg {i}")));
         }
 
-        app.compact_conversation();
+        app.spawn_compaction(None);
         assert!(app
             .status_bar
             .status_message
@@ -2347,12 +2743,13 @@ mod tests {
             .contains("too short"));
     }
 
-    /// Verifies compaction truncates messages to the recent_messages count and produces a summary.
+    /// Verifies drain_compaction_result applies a PipelineResult to the conversation.
     #[tokio::test]
     async fn compact_reduces_messages() {
+        use crate::store::types::CompactionMode;
+
         let (mut app, _tmp) = test_app_with_store();
         app.create_new_conversation();
-        app.config.conversation.recent_messages = 5;
 
         // Add 30 messages
         for i in 0..30 {
@@ -2364,10 +2761,105 @@ mod tests {
             });
         }
 
-        app.compact_conversation();
-        assert!(app.compaction_summary.is_some());
+        // Simulate a completed pipeline result by sending through the channel
+        let (tx, rx) = mpsc::unbounded_channel();
+        app.compaction_rx = Some(rx);
+
+        let kept_messages: Vec<Message> = (25..30).map(|i| Message::user(format!("msg {i}"))).collect();
+        tx.send(PipelineResult {
+            messages: kept_messages,
+            summary: Some("Summary of earlier conversation".to_string()),
+            total_removed: 25,
+            total_tokens_reclaimed: 500,
+            steps_applied: vec![CompactionMode::ToolClearing, CompactionMode::Truncation],
+        }).unwrap();
+        drop(tx);
+
+        app.drain_compaction_result();
+
+        // Verify compaction was applied
         let conv = app.conversations.active_conversation.as_ref().unwrap();
         assert_eq!(conv.messages.len(), 5);
+        assert_eq!(app.compaction_summary, Some("Summary of earlier conversation".to_string()));
+        assert_eq!(conv.compaction_history.len(), 1);
+        assert_eq!(conv.compaction_history[0].messages_dropped, 25);
+        assert!(app.compaction_rx.is_none());
+    }
+
+    /// Verifies should_auto_compact returns false when strategy is "none".
+    #[tokio::test]
+    async fn auto_compact_disabled_when_strategy_none() {
+        let (mut app, _tmp) = test_app_with_store();
+        app.config.conversation.compaction_strategy = "none".to_string();
+        app.create_new_conversation();
+        for i in 0..50 {
+            app.conversations.add_message(Message::user(format!("msg {i}")));
+        }
+        assert!(!app.should_auto_compact());
+    }
+
+    /// Verifies should_auto_compact returns false when compaction already in flight.
+    #[tokio::test]
+    async fn auto_compact_skips_when_in_flight() {
+        let (mut app, _tmp) = test_app_with_store();
+        app.create_new_conversation();
+        let (_tx, rx) = mpsc::unbounded_channel::<PipelineResult>();
+        app.compaction_rx = Some(rx);
+        assert!(!app.should_auto_compact());
+    }
+
+    /// Verifies spawn_compaction rejects when compaction already in progress.
+    #[tokio::test]
+    async fn spawn_compaction_rejects_duplicate() {
+        let (mut app, _tmp) = test_app_with_store();
+        app.create_new_conversation();
+        let (_tx, rx) = mpsc::unbounded_channel::<PipelineResult>();
+        app.compaction_rx = Some(rx);
+
+        app.spawn_compaction(None);
+        assert!(app.status_bar.status_message.as_ref().unwrap().contains("already in progress"));
+    }
+
+    /// Verifies restore_checkpoint clears compaction summary and pops compaction history.
+    #[tokio::test]
+    async fn restore_checkpoint_clears_state() {
+        use crate::store::types::{CompactionEvent, CompactionMode};
+
+        let (mut app, _tmp) = test_app_with_store();
+        app.create_new_conversation();
+
+        // Add messages and save
+        for i in 0..10 {
+            app.conversations.add_message(Message::user(format!("msg {i}")));
+        }
+
+        // Save a checkpoint manually
+        let conv = app.conversations.active_conversation.as_ref().unwrap();
+        if let Some(store) = &app.conversations.store {
+            store.save_checkpoint(conv.id, &conv.messages, Some("test")).unwrap();
+        }
+
+        // Add a compaction event
+        if let Some(conv) = &mut app.conversations.active_conversation {
+            conv.compaction_history.push(CompactionEvent {
+                timestamp: chrono::Utc::now(),
+                mode: CompactionMode::Truncation,
+                summary_preview: "test".to_string(),
+                messages_before: 10,
+                messages_dropped: 5,
+                tokens_reclaimed: 100,
+                checkpoint_id: None,
+            });
+        }
+        app.compaction_summary = Some("test summary".to_string());
+
+        // Restore latest checkpoint
+        app.restore_checkpoint(None);
+
+        assert!(app.compaction_summary.is_none());
+        let conv = app.conversations.active_conversation.as_ref().unwrap();
+        assert!(conv.compaction_history.is_empty());
+        assert_eq!(conv.messages.len(), 10);
     }
 
     /// Verifies ":set temperature" updates the config and rejects out-of-range values.

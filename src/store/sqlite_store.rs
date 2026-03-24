@@ -77,6 +77,9 @@ impl SqliteStore {
         if version < 2 {
             Self::migrate_v2(&conn)?;
         }
+        if version < 3 {
+            Self::migrate_v3(&conn)?;
+        }
 
         Ok(())
     }
@@ -134,6 +137,18 @@ impl SqliteStore {
              ALTER TABLE messages ADD COLUMN model TEXT;
 
              INSERT INTO schema_version (version) VALUES (2);",
+        )
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    fn migrate_v3(conn: &Connection) -> Result<(), StoreError> {
+        conn.execute_batch(
+            "ALTER TABLE conversations ADD COLUMN pinned_messages TEXT NOT NULL DEFAULT '[]';
+             ALTER TABLE conversations ADD COLUMN session_notes TEXT;
+             ALTER TABLE conversations ADD COLUMN compaction_history TEXT NOT NULL DEFAULT '[]';
+
+             INSERT INTO schema_version (version) VALUES (3);",
         )
         .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(())
@@ -232,7 +247,8 @@ impl Store for SqliteStore {
             .query_row(
                 "SELECT title, model, provider, context_name, created_at, updated_at,
                         total_input_tokens, total_output_tokens, total_cache_tokens,
-                        total_cost, turn_count, context_estimate
+                        total_cost, turn_count, context_estimate,
+                        pinned_messages, session_notes, compaction_history
                  FROM conversations WHERE id = ?1",
                 params![id_str],
                 |row| {
@@ -249,6 +265,9 @@ impl Store for SqliteStore {
                         row.get::<_, f64>(9)?,
                         row.get::<_, u32>(10)?,
                         row.get::<_, u32>(11)?,
+                        row.get::<_, String>(12)?,
+                        row.get::<_, Option<String>>(13)?,
+                        row.get::<_, String>(14)?,
                     ))
                 },
             )
@@ -261,7 +280,13 @@ impl Store for SqliteStore {
 
         let (title, model, provider, context_name, created_at_str, updated_at_str,
              total_input_tokens, total_output_tokens, total_cache_tokens,
-             total_cost, turn_count, context_estimate) = conv_row;
+             total_cost, turn_count, context_estimate,
+             pinned_json, session_notes, history_json) = conv_row;
+
+        let pinned_messages: Vec<usize> = serde_json::from_str(&pinned_json)
+            .unwrap_or_default();
+        let compaction_history: Vec<super::types::CompactionEvent> =
+            serde_json::from_str(&history_json).unwrap_or_default();
 
         let created_at = DateTime::parse_from_rfc3339(&created_at_str)
             .map_err(|e| StoreError::Deserialize(e.to_string()))?
@@ -322,6 +347,9 @@ impl Store for SqliteStore {
             total_cost,
             turn_count,
             context_estimate,
+            pinned_messages,
+            session_notes,
+            compaction_history,
         })
     }
 
@@ -335,11 +363,17 @@ impl Store for SqliteStore {
             .transaction()
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
+        let pinned_json = serde_json::to_string(&conversation.pinned_messages)
+            .unwrap_or_else(|_| "[]".to_string());
+        let history_json = serde_json::to_string(&conversation.compaction_history)
+            .unwrap_or_else(|_| "[]".to_string());
+
         // Upsert conversation row
         tx.execute(
             "INSERT INTO conversations (id, title, model, provider, context_name, created_at, updated_at,
-                total_input_tokens, total_output_tokens, total_cache_tokens, total_cost, turn_count, context_estimate)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                total_input_tokens, total_output_tokens, total_cache_tokens, total_cost, turn_count, context_estimate,
+                pinned_messages, session_notes, compaction_history)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 model = excluded.model,
@@ -351,7 +385,10 @@ impl Store for SqliteStore {
                 total_cache_tokens = excluded.total_cache_tokens,
                 total_cost = excluded.total_cost,
                 turn_count = excluded.turn_count,
-                context_estimate = excluded.context_estimate",
+                context_estimate = excluded.context_estimate,
+                pinned_messages = excluded.pinned_messages,
+                session_notes = excluded.session_notes,
+                compaction_history = excluded.compaction_history",
             params![
                 id_str,
                 conversation.title,
@@ -366,6 +403,9 @@ impl Store for SqliteStore {
                 conversation.total_cost,
                 conversation.turn_count,
                 conversation.context_estimate,
+                pinned_json,
+                conversation.session_notes,
+                history_json,
             ],
         )
         .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -561,6 +601,16 @@ impl Store for SqliteStore {
                 LIMIT -1 OFFSET ?2
              )",
             params![id_str, max as i64],
+        )
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    fn delete_checkpoint(&self, checkpoint_id: i64) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM checkpoints WHERE id = ?1",
+            params![checkpoint_id],
         )
         .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(())

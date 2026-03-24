@@ -22,7 +22,7 @@
 | `ui.sidebar_width`   | `25`    | Chat list panel width        |
 | `ui.tool_panel_width`| `20`    | Tool panel width             |
 | `ui.show_tool_panel` | `true`  | Toggle tool panel visibility |
-| `ui.show_timestamps` | `false` | Show HH:MM:SS on messages   |
+| `ui.show_timestamps` | `false` | Show HH:MM:SS on messages    |
 
 ## Modes
 

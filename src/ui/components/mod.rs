@@ -4,6 +4,8 @@ pub mod help_overlay;
 pub mod input_box;
 pub mod model_popup;
 pub mod model_selector;
+pub mod notes_editor;
+pub mod pulse_overlay;
 pub mod status_bar;
 pub mod tool_panel;
 

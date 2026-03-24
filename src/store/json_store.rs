@@ -183,6 +183,40 @@ impl Store for JsonStore {
         Ok(())
     }
 
+    fn delete_checkpoint(&self, checkpoint_id: i64) -> Result<(), StoreError> {
+        // Scan all checkpoint files and remove the matching entry
+        let cp_dir = self.conversations_dir.parent()
+            .unwrap_or(&self.conversations_dir)
+            .join("checkpoints");
+        if !cp_dir.exists() {
+            return Ok(());
+        }
+        let entries = std::fs::read_dir(&cp_dir)
+            .map_err(|e| StoreError::Io(e.to_string()))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| StoreError::Io(e.to_string()))?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let contents = std::fs::read_to_string(&path)
+                .map_err(|e| StoreError::Io(e.to_string()))?;
+            let mut checkpoints: Vec<Checkpoint> = match serde_json::from_str(&contents) {
+                Ok(cps) => cps,
+                Err(_) => continue,
+            };
+            let before = checkpoints.len();
+            checkpoints.retain(|c| c.id != checkpoint_id);
+            if checkpoints.len() < before {
+                let json = serde_json::to_string_pretty(&checkpoints)
+                    .map_err(|e| StoreError::Serialize(e.to_string()))?;
+                std::fs::write(&path, json).map_err(|e| StoreError::Io(e.to_string()))?;
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
     fn export_conversation(&self, id: Uuid) -> Result<String, StoreError> {
         let conversation = self.load(id)?;
         serde_json::to_string_pretty(&conversation)

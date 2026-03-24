@@ -18,14 +18,20 @@ pub enum Command {
     Usage,
     /// Show cost report across conversations.
     Spend,
-    /// Manually compact the current conversation.
-    Compact,
+    /// Manually compact the current conversation, with optional custom instructions.
+    Compact(Option<String>),
     /// List checkpoints for the current conversation.
     Checkpoints,
     /// Restore a checkpoint by index.
     Restore(Option<i64>),
     /// Set a runtime configuration value.
     Set(String, String),
+    /// Toggle the Pulse overlay.
+    Pulse,
+    /// Open the session notes editor.
+    EditSessionNotes,
+    /// Pin/unpin the currently selected message.
+    TogglePin,
     Unknown(String),
 }
 
@@ -63,7 +69,13 @@ pub fn parse_command(input: &str) -> Command {
         },
         "usage" | "tokens" => Command::Usage,
         "spend" | "cost" => Command::Spend,
-        "compact" => Command::Compact,
+        "compact" => match arg {
+            Some(a) if !a.is_empty() => Command::Compact(Some(a.to_string())),
+            _ => Command::Compact(None),
+        },
+        "pulse" => Command::Pulse,
+        "notes" => Command::EditSessionNotes,
+        "pin" => Command::TogglePin,
         "checkpoints" => Command::Checkpoints,
         "restore" => match arg {
             Some(a) if !a.is_empty() => match a.parse::<i64>() {
@@ -224,10 +236,14 @@ mod tests {
         assert_eq!(parse_command("cost"), Command::Spend);
     }
 
-    /// Ensures ":compact" parses to the Compact command.
+    /// Ensures ":compact" parses to the Compact command with optional instructions.
     #[test]
     fn parse_compact() {
-        assert_eq!(parse_command("compact"), Command::Compact);
+        assert_eq!(parse_command("compact"), Command::Compact(None));
+        assert_eq!(
+            parse_command("compact preserve the auth discussion"),
+            Command::Compact(Some("preserve the auth discussion".to_string()))
+        );
     }
 
     /// Ensures ":checkpoints" parses to the Checkpoints command.
@@ -253,6 +269,24 @@ mod tests {
         assert_eq!(parse_command("restore"), Command::Restore(None));
         assert_eq!(parse_command("restore 3"), Command::Restore(Some(3)));
         assert!(matches!(parse_command("restore abc"), Command::Unknown(_)));
+    }
+
+    /// Ensures ":pulse" parses to the Pulse command.
+    #[test]
+    fn parse_pulse() {
+        assert_eq!(parse_command("pulse"), Command::Pulse);
+    }
+
+    /// Ensures ":notes" parses to the EditSessionNotes command.
+    #[test]
+    fn parse_notes() {
+        assert_eq!(parse_command("notes"), Command::EditSessionNotes);
+    }
+
+    /// Ensures ":pin" parses to the TogglePin command.
+    #[test]
+    fn parse_pin() {
+        assert_eq!(parse_command("pin"), Command::TogglePin);
     }
 
     /// Ensures empty and whitespace-only input produce Command::Unknown.

@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::event::types::{Action, Mode};
+use crate::llm::health::HealthState;
 use crate::ui::theme::Theme;
 
 use super::Component;
@@ -14,6 +15,9 @@ use super::Component;
 pub struct StatusBar {
     pub(crate) mode: Mode,
     pub(crate) status_message: Option<String>,
+    pub(crate) health_state: Option<HealthState>,
+    pub(crate) usage_pct: Option<u32>,
+    pub(crate) has_compaction_summary: bool,
 }
 
 impl Default for StatusBar {
@@ -27,6 +31,9 @@ impl StatusBar {
         Self {
             mode: Mode::Normal,
             status_message: None,
+            health_state: None,
+            usage_pct: None,
+            has_compaction_summary: false,
         }
     }
 
@@ -84,6 +91,15 @@ impl Component for StatusBar {
             spans.push(Span::styled(
                 format!("  {status}"),
                 Style::default().fg(theme.status_message),
+            ));
+        }
+
+        if let (Some(health), Some(pct)) = (&self.health_state, self.usage_pct) {
+            let color = theme.health_color(health);
+            let compaction_indicator = if self.has_compaction_summary { " \u{27F3}" } else { "" };
+            spans.push(Span::styled(
+                format!("  \u{25C9} {}% {}{}", pct, health.label(), compaction_indicator),
+                Style::default().fg(color),
             ));
         }
 

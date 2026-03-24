@@ -63,6 +63,8 @@ struct AnthropicRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<AnthropicTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_management: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -249,6 +251,21 @@ impl From<&ChatRequest> for AnthropicRequest {
             });
         }
 
+        let context_management = if req.server_compaction {
+            let mut edit = serde_json::json!({
+                "type": "compact_20260112",
+                "trigger": {
+                    "type": "auto"
+                }
+            });
+            if let Some(instructions) = &req.compaction_instructions {
+                edit["instructions"] = serde_json::Value::String(instructions.clone());
+            }
+            Some(serde_json::json!({ "edits": [edit] }))
+        } else {
+            None
+        };
+
         Self {
             model: req.model.clone(),
             messages,
@@ -257,6 +274,7 @@ impl From<&ChatRequest> for AnthropicRequest {
             system,
             temperature: req.temperature,
             tools: convert_anthropic_tools(&req.tools),
+            context_management,
         }
     }
 }
@@ -448,17 +466,24 @@ impl LlmProvider for AnthropicProvider {
         tx: mpsc::UnboundedSender<StreamChunk>,
     ) -> Result<(), LlmError> {
         let has_tools = request.tools.is_some();
+        let use_server_compaction = request.server_compaction;
         let body = AnthropicRequest::from(&request);
         let url = self.messages_url();
 
         tracing::debug!("Sending Anthropic chat request to {url}");
 
-        let response = self
+        let mut req_builder = self
             .client
             .post(&url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+
+        if use_server_compaction {
+            req_builder = req_builder.header("anthropic-beta", "compact-2026-01-12");
+        }
+
+        let response = req_builder
             .json(&body)
             .send()
             .await

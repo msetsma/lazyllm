@@ -26,6 +26,24 @@ pub enum Action {
     Resize(u16, u16),
     Tick,
     None,
+    /// Toggle the Pulse overlay.
+    TogglePulse,
+    /// Trigger compaction from within the Pulse overlay.
+    PulseCompact,
+    /// Trigger compaction with a custom prompt.
+    PulseCompactWithPrompt,
+    /// Clear old tool results (lightweight compaction).
+    PulseClearToolResults,
+    /// Undo last compaction by restoring a checkpoint.
+    PulseUndoCompaction,
+    /// Toggle pin on the selected message.
+    PulseTogglePin,
+    /// Open the session notes editor.
+    PulseEditNotes,
+    /// Cycle the compaction mode (auto → client → server → auto).
+    PulseSwitchMode,
+    /// Raw key event passed through when an overlay needs key interception.
+    RawKey(KeyEvent),
 }
 
 /// Input mode for the application.

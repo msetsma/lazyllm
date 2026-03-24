@@ -43,6 +43,11 @@ impl InputBox {
         content
     }
 
+    pub fn set_content(&mut self, content: impl Into<String>) {
+        self.content = content.into();
+        self.cursor_pos = self.content.chars().count();
+    }
+
     pub fn set_mode(&mut self, mode: Mode) {
         self.mode = mode;
     }

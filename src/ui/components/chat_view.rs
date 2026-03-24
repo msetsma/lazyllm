@@ -168,6 +168,12 @@ impl ChatView {
         }
     }
 
+    /// Get the index of the currently selected message (or the last message).
+    pub fn selected_message_index(&self) -> usize {
+        self.visual_selection
+            .unwrap_or_else(|| self.messages.len().saturating_sub(1))
+    }
+
     /// Get the content of the currently selected message in visual mode.
     pub fn selected_content(&self) -> Option<&str> {
         self.visual_selection
@@ -528,8 +534,12 @@ impl Component for ChatView {
                         // Selected message is above viewport — scroll up to show it
                         sel_visual_start
                     } else if sel_visual_end > current_bottom {
-                        // Selected message is below viewport — scroll down
-                        sel_visual_end.saturating_sub(inner_height)
+                        // Selected message is below viewport — scroll down, but
+                        // never past the selection start to prevent oscillation
+                        // when a message is taller than the viewport.
+                        sel_visual_end
+                            .saturating_sub(inner_height)
+                            .min(sel_visual_start)
                     } else {
                         current_top
                     };
