@@ -1,10 +1,9 @@
 use async_trait::async_trait;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use super::LlmProvider;
-use super::streaming::{check_http_error, stream_sse_response};
+use super::streaming::{check_http_error, extract_json_error, stream_sse_response, strip_sse_data};
 use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk, ToolCall, ToolDefinition, TokenUsage};
 
 #[allow(dead_code)]
@@ -12,32 +11,9 @@ const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 4096;
 
-/// Anthropic Messages API provider with SSE streaming.
-#[derive(Debug)]
-pub struct AnthropicProvider {
-    name: String,
-    api_key: String,
-    base_url: String,
-    models: Vec<ModelInfo>,
-    client: Client,
-}
+define_provider!(AnthropicProvider);
 
 impl AnthropicProvider {
-    pub fn new(
-        name: impl Into<String>,
-        api_key: impl Into<String>,
-        base_url: impl Into<String>,
-        models: Vec<ModelInfo>,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            api_key: api_key.into(),
-            base_url: base_url.into(),
-            models,
-            client: Client::new(),
-        }
-    }
-
     fn messages_url(&self) -> String {
         let base = self.base_url.trim_end_matches('/');
         if base.ends_with("/v1/messages") {
@@ -166,17 +142,6 @@ struct AnthropicDelta {
 
 #[derive(Debug, Deserialize)]
 struct AnthropicErrorDetail {
-    message: String,
-}
-
-/// Anthropic error response body.
-#[derive(Debug, Deserialize)]
-struct AnthropicErrorResponse {
-    error: AnthropicErrorResponseDetail,
-}
-
-#[derive(Debug, Deserialize)]
-struct AnthropicErrorResponseDetail {
     message: String,
 }
 
@@ -319,7 +284,7 @@ impl AnthropicToolAccumulator {
 
 /// Parse a single SSE data line from the Anthropic stream.
 fn parse_anthropic_sse(line: &str) -> Option<StreamChunk> {
-    let data = line.strip_prefix("data: ")?;
+    let data = strip_sse_data(line)?;
 
     let event: AnthropicStreamEvent = match serde_json::from_str(data) {
         Ok(e) => e,
@@ -373,7 +338,7 @@ fn parse_anthropic_sse_with_tools(
     line: &str,
     accumulator: &mut AnthropicToolAccumulator,
 ) -> Option<StreamChunk> {
-    let data = line.strip_prefix("data: ")?;
+    let data = strip_sse_data(line)?;
 
     let event: AnthropicStreamEvent = match serde_json::from_str(data) {
         Ok(e) => e,
@@ -489,12 +454,7 @@ impl LlmProvider for AnthropicProvider {
             .await
             .map_err(|e| LlmError::NetworkError(e.to_string()))?;
 
-        let response = check_http_error(response, |body| {
-            serde_json::from_str::<AnthropicErrorResponse>(body)
-                .map(|e| e.error.message)
-                .ok()
-        })
-        .await?;
+        let response = check_http_error(response, extract_json_error).await?;
 
         if has_tools {
             let mut accumulator = AnthropicToolAccumulator::default();

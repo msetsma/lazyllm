@@ -1,4 +1,7 @@
 pub mod app;
+mod app_commands;
+mod app_compaction;
+mod app_streaming;
 pub mod command;
 pub mod config;
 pub mod context;

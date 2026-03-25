@@ -182,12 +182,12 @@ impl ConversationManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::json_store::JsonStore;
+    use crate::store::sqlite_store::SqliteStore;
     use tempfile::TempDir;
 
     fn manager_with_store() -> (ConversationManager, TempDir) {
         let tmp = TempDir::new().unwrap();
-        let store = JsonStore::new(tmp.path()).unwrap();
+        let store = SqliteStore::new(tmp.path()).unwrap();
         let mgr = ConversationManager::new().with_store(store);
         (mgr, tmp)
     }

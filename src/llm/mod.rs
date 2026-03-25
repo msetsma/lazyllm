@@ -1,3 +1,62 @@
+/// Generate a provider struct, constructor, and trivial `LlmProvider` methods.
+///
+/// Two forms:
+///   `define_provider!(OpenAiProvider);`          — has `api_key` field
+///   `define_provider!(OllamaProvider, no_key);`  — omits `api_key` field
+macro_rules! define_provider {
+    ($name:ident) => {
+        #[derive(Debug)]
+        pub struct $name {
+            name: String,
+            api_key: String,
+            base_url: String,
+            models: Vec<super::types::ModelInfo>,
+            client: ::reqwest::Client,
+        }
+
+        impl $name {
+            pub fn new(
+                name: impl Into<String>,
+                api_key: impl Into<String>,
+                base_url: impl Into<String>,
+                models: Vec<super::types::ModelInfo>,
+            ) -> Self {
+                Self {
+                    name: name.into(),
+                    api_key: api_key.into(),
+                    base_url: base_url.into(),
+                    models,
+                    client: ::reqwest::Client::new(),
+                }
+            }
+        }
+    };
+    ($name:ident, no_key) => {
+        #[derive(Debug)]
+        pub struct $name {
+            name: String,
+            base_url: String,
+            models: Vec<super::types::ModelInfo>,
+            client: ::reqwest::Client,
+        }
+
+        impl $name {
+            pub fn new(
+                name: impl Into<String>,
+                base_url: impl Into<String>,
+                models: Vec<super::types::ModelInfo>,
+            ) -> Self {
+                Self {
+                    name: name.into(),
+                    base_url: base_url.into(),
+                    models,
+                    client: ::reqwest::Client::new(),
+                }
+            }
+        }
+    };
+}
+
 pub mod anthropic;
 pub mod capabilities;
 pub mod compaction;

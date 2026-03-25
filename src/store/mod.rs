@@ -1,4 +1,3 @@
-pub mod json_store;
 pub mod sqlite_store;
 pub mod types;
 
@@ -70,8 +69,19 @@ pub trait Store: Send + Sync {
     fn delete_checkpoint(&self, checkpoint_id: i64) -> Result<(), StoreError>;
 
     /// Export a conversation as a JSON string.
-    fn export_conversation(&self, id: Uuid) -> Result<String, StoreError>;
+    fn export_conversation(&self, id: Uuid) -> Result<String, StoreError> {
+        let conversation = self.load(id)?;
+        serde_json::to_string_pretty(&conversation)
+            .map_err(|e| StoreError::Serialize(e.to_string()))
+    }
 
     /// Import a conversation from a JSON string, assigning a new ID.
-    fn import_conversation(&self, json: &str) -> Result<Uuid, StoreError>;
+    fn import_conversation(&self, json: &str) -> Result<Uuid, StoreError> {
+        let mut conversation: Conversation = serde_json::from_str(json)
+            .map_err(|e| StoreError::Deserialize(e.to_string()))?;
+        conversation.id = Uuid::new_v4();
+        conversation.updated_at = chrono::Utc::now();
+        self.save(&conversation)?;
+        Ok(conversation.id)
+    }
 }

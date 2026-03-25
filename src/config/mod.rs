@@ -1,4 +1,5 @@
 pub mod types;
+mod validation;
 
 use std::path::{Path, PathBuf};
 

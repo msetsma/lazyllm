@@ -1,4 +1,5 @@
 use futures::StreamExt;
+use serde::Deserialize;
 use tokio::sync::mpsc;
 
 use super::types::{LlmError, StreamChunk};
@@ -82,6 +83,40 @@ pub async fn stream_sse_response_multi(
 
     tx.send(StreamChunk::Done).ok();
     Ok(())
+}
+
+/// Strip the `data: ` prefix from an SSE line, returning the JSON payload.
+///
+/// Returns `None` if the line doesn't start with `data: ` or is the
+/// `data: [DONE]` sentinel used by OpenAI-compatible APIs.
+pub fn strip_sse_data(line: &str) -> Option<&str> {
+    let data = line.strip_prefix("data: ")?;
+    if data == "[DONE]" {
+        return None;
+    }
+    Some(data)
+}
+
+/// Common `{ "error": { "message": "..." } }` response shape shared by
+/// OpenAI, Anthropic, and Google APIs.
+#[derive(Debug, Deserialize)]
+pub struct ApiErrorResponse {
+    pub error: ApiErrorDetail,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiErrorDetail {
+    pub message: String,
+}
+
+/// Extract an error message from a JSON body using the common
+/// `{ "error": { "message": "..." } }` shape.
+///
+/// Suitable as the `extract_message` callback for [`check_http_error`].
+pub fn extract_json_error(body: &str) -> Option<String> {
+    serde_json::from_str::<ApiErrorResponse>(body)
+        .map(|e| e.error.message)
+        .ok()
 }
 
 /// Check an HTTP response for errors, returning the response if successful.

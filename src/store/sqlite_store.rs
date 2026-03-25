@@ -39,7 +39,7 @@ impl SqliteStore {
         let store = Self {
             conn: Mutex::new(conn),
         };
-        store.run_migrations()?;
+        store.init_schema()?;
         Ok(store)
     }
 
@@ -50,63 +50,46 @@ impl SqliteStore {
         std::path::PathBuf::from(conn.path().unwrap())
     }
 
-    fn run_migrations(&self) -> Result<(), StoreError> {
+    fn init_schema(&self) -> Result<(), StoreError> {
         let conn = self.conn.lock().unwrap();
 
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER NOT NULL
-            );",
-        )
-        .map_err(|e| StoreError::Database(e.to_string()))?;
-
-        let version: i64 = conn
-            .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM schema_version",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-
-        if version < 1 {
-            Self::migrate_v1(&conn)?;
-        }
-        if version < 2 {
-            Self::migrate_v2(&conn)?;
-        }
-        if version < 3 {
-            Self::migrate_v3(&conn)?;
-        }
-
-        Ok(())
-    }
-
-    fn migrate_v1(conn: &Connection) -> Result<(), StoreError> {
-        conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS conversations (
-                id              TEXT PRIMARY KEY,
-                title           TEXT NOT NULL,
-                model           TEXT NOT NULL,
-                provider        TEXT NOT NULL,
-                context_name    TEXT,
-                created_at      TEXT NOT NULL,
-                updated_at      TEXT NOT NULL,
+                id                  TEXT PRIMARY KEY,
+                title               TEXT NOT NULL,
+                model               TEXT NOT NULL,
+                provider            TEXT NOT NULL,
+                context_name        TEXT,
+                created_at          TEXT NOT NULL,
+                updated_at          TEXT NOT NULL,
                 total_input_tokens  INTEGER NOT NULL DEFAULT 0,
-                total_output_tokens INTEGER NOT NULL DEFAULT 0
+                total_output_tokens INTEGER NOT NULL DEFAULT 0,
+                total_cache_tokens  INTEGER NOT NULL DEFAULT 0,
+                total_cost          REAL NOT NULL DEFAULT 0.0,
+                turn_count          INTEGER NOT NULL DEFAULT 0,
+                context_estimate    INTEGER NOT NULL DEFAULT 0,
+                pinned_messages     TEXT NOT NULL DEFAULT '[]',
+                session_notes       TEXT,
+                compaction_history  TEXT NOT NULL DEFAULT '[]'
             );
 
             CREATE TABLE IF NOT EXISTS messages (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-                message_index   INTEGER NOT NULL,
-                role            TEXT NOT NULL,
-                content         TEXT NOT NULL,
-                metadata_json   TEXT,
-                input_tokens    INTEGER,
-                output_tokens   INTEGER
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id         TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                message_index           INTEGER NOT NULL,
+                role                    TEXT NOT NULL,
+                content                 TEXT NOT NULL,
+                metadata_json           TEXT,
+                input_tokens            INTEGER,
+                output_tokens           INTEGER,
+                cache_read_tokens       INTEGER,
+                cache_creation_tokens   INTEGER,
+                cost                    REAL,
+                duration_ms             INTEGER,
+                model                   TEXT
             );
 
             CREATE TABLE IF NOT EXISTS checkpoints (
@@ -115,42 +98,10 @@ impl SqliteStore {
                 snapshot_json   TEXT NOT NULL,
                 reason          TEXT,
                 created_at      TEXT NOT NULL
-            );
-
-            INSERT INTO schema_version (version) VALUES (1);",
+            );",
         )
         .map_err(|e| StoreError::Database(e.to_string()))?;
-        Ok(())
-    }
 
-    fn migrate_v2(conn: &Connection) -> Result<(), StoreError> {
-        conn.execute_batch(
-            "ALTER TABLE conversations ADD COLUMN total_cache_tokens INTEGER NOT NULL DEFAULT 0;
-             ALTER TABLE conversations ADD COLUMN total_cost REAL NOT NULL DEFAULT 0.0;
-             ALTER TABLE conversations ADD COLUMN turn_count INTEGER NOT NULL DEFAULT 0;
-             ALTER TABLE conversations ADD COLUMN context_estimate INTEGER NOT NULL DEFAULT 0;
-
-             ALTER TABLE messages ADD COLUMN cache_read_tokens INTEGER;
-             ALTER TABLE messages ADD COLUMN cache_creation_tokens INTEGER;
-             ALTER TABLE messages ADD COLUMN cost REAL;
-             ALTER TABLE messages ADD COLUMN duration_ms INTEGER;
-             ALTER TABLE messages ADD COLUMN model TEXT;
-
-             INSERT INTO schema_version (version) VALUES (2);",
-        )
-        .map_err(|e| StoreError::Database(e.to_string()))?;
-        Ok(())
-    }
-
-    fn migrate_v3(conn: &Connection) -> Result<(), StoreError> {
-        conn.execute_batch(
-            "ALTER TABLE conversations ADD COLUMN pinned_messages TEXT NOT NULL DEFAULT '[]';
-             ALTER TABLE conversations ADD COLUMN session_notes TEXT;
-             ALTER TABLE conversations ADD COLUMN compaction_history TEXT NOT NULL DEFAULT '[]';
-
-             INSERT INTO schema_version (version) VALUES (3);",
-        )
-        .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(())
     }
 
@@ -616,20 +567,6 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    fn export_conversation(&self, id: Uuid) -> Result<String, StoreError> {
-        let conversation = self.load(id)?;
-        serde_json::to_string_pretty(&conversation)
-            .map_err(|e| StoreError::Serialize(e.to_string()))
-    }
-
-    fn import_conversation(&self, json: &str) -> Result<Uuid, StoreError> {
-        let mut conversation: Conversation = serde_json::from_str(json)
-            .map_err(|e| StoreError::Deserialize(e.to_string()))?;
-        conversation.id = Uuid::new_v4();
-        conversation.updated_at = Utc::now();
-        self.save(&conversation)?;
-        Ok(conversation.id)
-    }
 }
 
 #[cfg(test)]
@@ -825,12 +762,12 @@ mod tests {
         assert_eq!(loaded.context_name, Some("coding".to_string()));
     }
 
-    /// Ensures running migrations multiple times is safe and does not corrupt data.
+    /// Ensures running init_schema multiple times is safe and does not corrupt data.
     #[test]
-    fn migration_is_idempotent() {
+    fn schema_init_is_idempotent() {
         let (store, _tmp) = test_store();
 
-        store.run_migrations().unwrap();
+        store.init_schema().unwrap();
 
         let conv = sample_conversation();
         store.save(&conv).unwrap();

@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
@@ -9,33 +8,9 @@ use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk, TokenUsage};
 
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 
-/// Ollama provider using the native Ollama chat API with streaming.
-///
-/// While Ollama supports an OpenAI-compatible endpoint, this implementation
-/// uses the native `/api/chat` endpoint for better compatibility with
-/// Ollama-specific features.
-#[derive(Debug)]
-pub struct OllamaProvider {
-    name: String,
-    base_url: String,
-    models: Vec<ModelInfo>,
-    client: Client,
-}
+define_provider!(OllamaProvider, no_key);
 
 impl OllamaProvider {
-    pub fn new(
-        name: impl Into<String>,
-        base_url: impl Into<String>,
-        models: Vec<ModelInfo>,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            base_url: base_url.into(),
-            models,
-            client: Client::new(),
-        }
-    }
-
     /// Create with default localhost URL.
     pub fn local(name: impl Into<String>, models: Vec<String>) -> Self {
         let model_infos = models.into_iter().map(ModelInfo::new).collect();

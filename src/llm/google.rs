@@ -1,41 +1,17 @@
 use async_trait::async_trait;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use super::LlmProvider;
-use super::streaming::{check_http_error, stream_sse_response};
+use super::streaming::{check_http_error, extract_json_error, stream_sse_response, strip_sse_data};
 use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk, TokenUsage};
 
 #[allow(dead_code)]
 const GOOGLE_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 
-/// Google Gemini API provider with SSE streaming.
-#[derive(Debug)]
-pub struct GoogleProvider {
-    name: String,
-    api_key: String,
-    base_url: String,
-    models: Vec<ModelInfo>,
-    client: Client,
-}
+define_provider!(GoogleProvider);
 
 impl GoogleProvider {
-    pub fn new(
-        name: impl Into<String>,
-        api_key: impl Into<String>,
-        base_url: impl Into<String>,
-        models: Vec<ModelInfo>,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            api_key: api_key.into(),
-            base_url: base_url.into(),
-            models,
-            client: Client::new(),
-        }
-    }
-
     fn stream_url(&self, model: &str) -> String {
         let base = self.base_url.trim_end_matches('/');
         format!(
@@ -121,17 +97,6 @@ struct GeminiError {
     message: String,
 }
 
-/// Gemini error response for non-streaming errors.
-#[derive(Debug, Deserialize)]
-struct GeminiErrorResponse {
-    error: GeminiErrorDetail,
-}
-
-#[derive(Debug, Deserialize)]
-struct GeminiErrorDetail {
-    message: String,
-}
-
 impl From<&ChatRequest> for GeminiRequest {
     fn from(req: &ChatRequest) -> Self {
         let mut system_instruction = None;
@@ -184,7 +149,7 @@ impl From<&ChatRequest> for GeminiRequest {
 
 /// Parse a single SSE data line from the Gemini stream.
 fn parse_gemini_sse(line: &str) -> Option<StreamChunk> {
-    let data = line.strip_prefix("data: ")?;
+    let data = strip_sse_data(line)?;
 
     let response: GeminiStreamResponse = match serde_json::from_str(data) {
         Ok(r) => r,
@@ -249,12 +214,7 @@ impl LlmProvider for GoogleProvider {
             .await
             .map_err(|e| LlmError::NetworkError(e.to_string()))?;
 
-        let response = check_http_error(response, |body| {
-            serde_json::from_str::<GeminiErrorResponse>(body)
-                .map(|e| e.error.message)
-                .ok()
-        })
-        .await?;
+        let response = check_http_error(response, extract_json_error).await?;
 
         stream_sse_response(response, &tx, parse_gemini_sse, |_| false).await
     }

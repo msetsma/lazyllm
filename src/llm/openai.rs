@@ -1,39 +1,14 @@
 use async_trait::async_trait;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use super::LlmProvider;
-use super::streaming::{check_http_error, stream_sse_response, stream_sse_response_multi};
+use super::streaming::{check_http_error, extract_json_error, stream_sse_response, stream_sse_response_multi, strip_sse_data};
 use super::types::{ChatRequest, LlmError, ModelInfo, StreamChunk, ToolCall, ToolDefinition, TokenUsage};
 
-/// OpenAI-compatible provider. Works with OpenAI API, Azure, and any
-/// compatible endpoint (e.g., local servers with OpenAI-compatible API).
-#[derive(Debug)]
-pub struct OpenAiProvider {
-    name: String,
-    api_key: String,
-    base_url: String,
-    models: Vec<ModelInfo>,
-    client: Client,
-}
+define_provider!(OpenAiProvider);
 
 impl OpenAiProvider {
-    pub fn new(
-        name: impl Into<String>,
-        api_key: impl Into<String>,
-        base_url: impl Into<String>,
-        models: Vec<ModelInfo>,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            api_key: api_key.into(),
-            base_url: base_url.into(),
-            models,
-            client: Client::new(),
-        }
-    }
-
     fn chat_url(&self) -> String {
         let base = self.base_url.trim_end_matches('/');
         format!("{base}/chat/completions")
@@ -143,17 +118,6 @@ struct OpenAiFunctionDelta {
 struct OpenAiUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
-}
-
-/// OpenAI error response body.
-#[derive(Debug, Deserialize)]
-struct OpenAiErrorResponse {
-    error: OpenAiErrorDetail,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiErrorDetail {
-    message: String,
 }
 
 fn convert_tool_definitions(tools: &Option<Vec<ToolDefinition>>) -> Option<Vec<OpenAiTool>> {
@@ -286,11 +250,11 @@ impl ToolCallAccumulator {
 /// Parse a single SSE data line into a StreamChunk.
 /// Returns an additional flag indicating tool call deltas that need accumulation.
 fn parse_sse_line(line: &str) -> Option<StreamChunk> {
-    let data = line.strip_prefix("data: ")?;
-
-    if data.trim() == "[DONE]" {
-        return Some(StreamChunk::Done);
-    }
+    let data = match strip_sse_data(line) {
+        Some(d) => d,
+        None if line.starts_with("data: ") => return Some(StreamChunk::Done), // [DONE]
+        None => return None,
+    };
 
     let chunk: OpenAiStreamChunk = match serde_json::from_str(data) {
         Ok(c) => c,
@@ -324,13 +288,11 @@ fn parse_sse_line_with_tools(
     line: &str,
     accumulator: &mut ToolCallAccumulator,
 ) -> Vec<StreamChunk> {
-    let Some(data) = line.strip_prefix("data: ") else {
-        return vec![];
+    let data = match strip_sse_data(line) {
+        Some(d) => d,
+        None if line.starts_with("data: ") => return vec![StreamChunk::Done], // [DONE]
+        None => return vec![],
     };
-
-    if data.trim() == "[DONE]" {
-        return vec![StreamChunk::Done];
-    }
 
     let chunk: OpenAiStreamChunk = match serde_json::from_str(data) {
         Ok(c) => c,
@@ -408,12 +370,7 @@ impl LlmProvider for OpenAiProvider {
             .await
             .map_err(|e| LlmError::NetworkError(e.to_string()))?;
 
-        let response = check_http_error(response, |body| {
-            serde_json::from_str::<OpenAiErrorResponse>(body)
-                .map(|e| e.error.message)
-                .ok()
-        })
-        .await?;
+        let response = check_http_error(response, extract_json_error).await?;
 
         if has_tools {
             let mut accumulator = ToolCallAccumulator::default();
