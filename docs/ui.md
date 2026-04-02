@@ -34,6 +34,7 @@ lazyllm uses vim-style modal editing.
 | **Insert**  | `INSERT`  | Compose and send messages      |
 | **Visual**  | `VISUAL`  | Scroll and copy                |
 | **Command** | `COMMAND` | Execute `:` commands           |
+| **Search**  | `SEARCH`  | Search within conversation     |
 
 ## Keybindings
 
@@ -51,6 +52,7 @@ lazyllm uses vim-style modal editing.
 | `i`              | Enter Insert mode       |
 | `v`              | Enter Visual mode       |
 | `:`              | Enter Command mode      |
+| `/`              | Enter Search mode       |
 | `Tab`            | Focus next panel        |
 | `Shift+Tab`      | Focus previous panel    |
 | `h` / `Left`     | Focus previous panel    |
@@ -61,6 +63,8 @@ lazyllm uses vim-style modal editing.
 | `n`              | New chat                |
 | `d`              | Delete chat             |
 | `m`              | Toggle model selector   |
+| `t`              | Toggle tool panel       |
+| `P`              | Toggle Pulse overlay    |
 | `?`              | Toggle help overlay     |
 
 ### Insert mode
@@ -90,19 +94,103 @@ lazyllm uses vim-style modal editing.
 | `Backspace` | Delete character    |
 | *(typing)*  | Insert character    |
 
+### Search mode
+
+| Key            | Action              |
+|----------------|---------------------|
+| `Esc`          | Cancel search       |
+| `Enter`        | Next match          |
+| `Down`         | Next match          |
+| `Up`           | Previous match      |
+| `Backspace`    | Delete character    |
+| *(typing)*     | Insert character    |
+
+### Pulse overlay
+
+The Pulse overlay is opened with `P` in Normal mode (or `:pulse`). All keys
+are consumed by the overlay while it is open.
+
+| Key       | Action                              |
+|-----------|-------------------------------------|
+| `P` / `Esc` / `q` | Close overlay              |
+| `j` / `Down` | Scroll down                    |
+| `k` / `Up`   | Scroll up                      |
+| `c`       | Trigger compaction                  |
+| `C`       | Trigger compaction with custom prompt |
+| `t`       | Clear tool results (cheapest compaction) |
+| `u`       | Undo last compaction                |
+| `p`       | Pin / unpin selected message        |
+| `n`       | Open session notes editor           |
+| `s`       | Cycle compaction mode               |
+
 ## Commands
 
 Enter command mode with `:` then type a command.
 
-| Command            | Description          |
-|--------------------|----------------------|
-| `:q` / `:quit`     | Quit                 |
-| `:model <id>`      | Switch model         |
-| `:provider <name>` | Switch provider      |
-| `:new`             | New chat             |
-| `:delete` / `:del` | Delete current chat  |
-| `:clear`           | Clear messages       |
-| `:help`            | Toggle help overlay  |
+### Navigation & chat
+
+| Command                | Aliases       | Description                        |
+|------------------------|---------------|------------------------------------|
+| `:q` / `:quit`         |               | Quit                               |
+| `:new`                 |               | New chat                           |
+| `:delete`              | `:del`        | Delete current chat                |
+| `:clear`               |               | Clear messages in current chat     |
+| `:help`                |               | Toggle help overlay                |
+| `:pulse`               |               | Toggle Pulse overlay               |
+
+### Model & provider
+
+| Command                | Description                                    |
+|------------------------|------------------------------------------------|
+| `:model <id>`          | Switch to a specific model                     |
+| `:provider <name>`     | Switch to a different provider                 |
+
+### Context
+
+| Command                | Aliases       | Description                        |
+|------------------------|---------------|------------------------------------|
+| `:context <name>`      | `:ctx <name>` | Load a context file                |
+| `:context none`        | `:ctx`        | Clear the active context           |
+
+### Compaction & checkpoints
+
+| Command                | Description                                    |
+|------------------------|------------------------------------------------|
+| `:compact`             | Trigger compaction immediately                 |
+| `:compact <prompt>`    | Compact with a custom summarization prompt     |
+| `:checkpoints`         | List available checkpoints for this chat       |
+| `:restore`             | Restore the most recent checkpoint             |
+| `:restore <id>`        | Restore a specific checkpoint by ID           |
+
+### Usage & export
+
+| Command                | Aliases       | Description                        |
+|------------------------|---------------|------------------------------------|
+| `:usage`               | `:tokens`     | Show token usage summary           |
+| `:spend`               | `:cost`       | Show cost breakdown                |
+| `:export`              |               | Export conversation to JSON        |
+| `:import <path>`       |               | Import conversation from JSON      |
+
+### Session
+
+| Command                | Description                                    |
+|------------------------|------------------------------------------------|
+| `:notes`               | Edit session notes                             |
+| `:pin`                 | Pin / unpin the selected message               |
+
+### Runtime config
+
+`:set <key> <value>` — change a setting for the current session.
+
+| Key                  | Values            | Description                       |
+|----------------------|-------------------|-----------------------------------|
+| `temperature`        | `0.0` – `2.0`     | Model sampling temperature        |
+| `compaction`         | `auto` / `truncation` / `summarization` / `none` | Compaction strategy |
+| `recent_messages`    | integer           | Minimum messages kept after compaction |
+| `show_cost`          | `true` / `false`  | Show per-turn cost                |
+| `show_tokens`        | `true` / `false`  | Show token counts                 |
+| `timestamps`         | `true` / `false`  | Show message timestamps           |
+| `system_prompt`      | text / `none`     | Set or clear the system prompt    |
 
 ## Focus Management
 
@@ -186,35 +274,102 @@ popup_border = "#bd93f9"
 
 ### All theme tokens
 
+#### Panels & borders
+
 | Token              | Default      | Used in                           |
-|--------------------|------------- |-----------------------------------|
+|--------------------|--------------|-----------------------------------|
 | `border_focused`   | `cyan`       | Active panel border               |
 | `border_unfocused` | `dark_gray`  | Inactive panel border             |
-| `mode_normal_bg`   | `blue`       | Status bar Normal mode background |
-| `mode_normal_fg`   | `black`      | Status bar Normal mode text       |
-| `mode_insert_bg`   | `green`      | Status bar Insert mode background |
-| `mode_insert_fg`   | `black`      | Status bar Insert mode text       |
-| `mode_visual_bg`   | `magenta`    | Status bar Visual mode background |
-| `mode_visual_fg`   | `black`      | Status bar Visual mode text       |
-| `mode_command_bg`  | `yellow`     | Status bar Command mode background|
-| `mode_command_fg`  | `black`      | Status bar Command mode text      |
-| `user_label`       | `green`      | "You:" label in chat              |
-| `assistant_label`  | `blue`       | "Assistant:" label in chat        |
-| `system_label`     | `yellow`     | "System:" label in chat           |
+
+#### Status bar modes
+
+| Token              | Default      | Used in                           |
+|--------------------|--------------|-----------------------------------|
+| `mode_normal_bg`   | `blue`       | Normal mode background            |
+| `mode_normal_fg`   | `black`      | Normal mode text                  |
+| `mode_insert_bg`   | `green`      | Insert mode background            |
+| `mode_insert_fg`   | `black`      | Insert mode text                  |
+| `mode_visual_bg`   | `magenta`    | Visual mode background            |
+| `mode_visual_fg`   | `black`      | Visual mode text                  |
+| `mode_command_bg`  | `yellow`     | Command mode background           |
+| `mode_command_fg`  | `black`      | Command mode text                 |
+
+#### Chat messages
+
+| Token              | Default      | Used in                           |
+|--------------------|--------------|-----------------------------------|
+| `user_label`       | `green`      | "You:" label                      |
+| `user_msg_bg`      | *(none)*     | User message bubble background    |
+| `assistant_label`  | `blue`       | "Assistant:" label                |
+| `assistant_msg_bg` | *(none)*     | Assistant message bubble background |
+| `system_label`     | `yellow`     | "System:" label                   |
 | `separator`        | `dark_gray`  | Dashed line between messages      |
 | `timestamp`        | `dark_gray`  | Message timestamps                |
+| `visual_select`    | `cyan`       | Visual mode selection highlight   |
+
+#### General UI
+
+| Token              | Default      | Used in                           |
+|--------------------|--------------|-----------------------------------|
 | `highlight`        | `cyan`       | Selected items, model name        |
 | `hint_text`        | `dark_gray`  | Keybinding hints in status bar    |
 | `status_message`   | `yellow`     | Status bar messages               |
-| `label`            | `dark_gray`  | Labels ("Model:", "Provider:", etc)|
+| `label`            | `dark_gray`  | Labels ("Model:", "Provider:", …) |
 | `empty_state`      | `dark_gray`  | "No MCP servers" placeholder      |
-| `provider_name`    | `green`      | Provider name in model bar        |
-| `mcp_count`        | `yellow`     | MCP server count                  |
-| `help_title`       | `cyan`       | Help overlay title                |
-| `help_section`     | `yellow`     | Help overlay section headers      |
-| `help_key`         | `green`      | Help overlay key column           |
-| `server_name`      | `yellow`     | MCP server names in tool panel    |
 | `popup_border`     | `cyan`       | Model selector & help popup border|
+
+#### Model selector bar
+
+| Token              | Default      | Used in                           |
+|--------------------|--------------|-----------------------------------|
+| `provider_name`    | `green`      | Provider name                     |
+| `mcp_count`        | `yellow`     | MCP server count                  |
+
+#### Help overlay
+
+| Token              | Default      | Used in                           |
+|--------------------|--------------|-----------------------------------|
+| `help_title`       | `cyan`       | Help overlay title                |
+| `help_section`     | `yellow`     | Section headers                   |
+| `help_key`         | `green`      | Key column                        |
+
+#### Tool panel
+
+| Token              | Default      | Used in                           |
+|--------------------|--------------|-----------------------------------|
+| `server_name`      | `yellow`     | MCP server names                  |
+
+#### Context health (Pulse overlay & status bar)
+
+Health colours reflect context window usage: fresh < 30%, working 30–60%,
+warm 60–75%, hot ≥ 75%.
+
+| Token              | Default      | Used in                           |
+|--------------------|--------------|-----------------------------------|
+| `health_fresh`     | `green`      | Usage < 30%                       |
+| `health_working`   | `cyan`       | Usage 30–60%                      |
+| `health_warm`      | `yellow`     | Usage 60–75%                      |
+| `health_hot`       | `red`        | Usage ≥ 75%                       |
+
+#### Pulse overlay — budget breakdown
+
+| Token                | Default      | Used in                           |
+|----------------------|--------------|-----------------------------------|
+| `budget_system`      | `blue`       | System prompt token bar           |
+| `budget_context`     | `cyan`       | Context files token bar           |
+| `budget_tools`       | `magenta`    | Tool definitions token bar        |
+| `budget_compaction`  | `yellow`     | Compaction summary token bar      |
+| `budget_messages`    | `green`      | Message history token bar         |
+| `budget_free`        | `dark_gray`  | Remaining free tokens bar         |
+
+#### Pulse overlay — chrome
+
+| Token                | Default      | Used in                           |
+|----------------------|--------------|-----------------------------------|
+| `pulse_border`       | `cyan`       | Pulse overlay border              |
+| `pulse_section_title`| `yellow`     | Section header text               |
+| `pulse_pin_icon`     | `magenta`    | Pinned message icon               |
+| `pulse_note_border`  | `blue`       | Notes editor border               |
 
 ### Minimal override example
 
@@ -293,10 +448,10 @@ Visual mode.
 
 ### Input Box (bottom)
 Text composition area. Shows the current mode in the title. In Command
-mode, input is prefixed with `:`.
+mode, input is prefixed with `:`. In Search mode, input is prefixed with `/`.
 
 ### Tool Panel (right sidebar)
-Displays available MCP tools grouped by server. Read-only.
+Displays available MCP tools grouped by server. Toggled with `t`. Read-only.
 
 ### Status Bar (bottom)
 Shows the current mode with a colour-coded indicator, contextual
@@ -309,3 +464,24 @@ Modal popup toggled with `?`. Shows all keybindings and commands.
 ### Model Popup
 Modal popup toggled with `m`. Lists all configured provider/model
 combinations for selection.
+
+### Pulse Overlay
+Modal popup toggled with `P` or `:pulse`. Displays a real-time dashboard
+of context window health, broken into sections:
+
+- **Context budget** — token allocation bar showing system prompt, context
+  files, tools, compaction summary, pinned messages, message history, and
+  free space. Coloured by health state (fresh → working → warm → hot).
+- **Session stats** — turn count, total input/output tokens, cumulative cost,
+  cache hit rate, estimated cost per message, compaction count.
+- **Pinned messages** — list of messages protected from compaction.
+- **Session notes** — freeform notes attached to this conversation.
+- **Compaction history** — timestamped log of previous compactions.
+
+Actions available from within the overlay: compact (`c`/`C`), clear tool
+results (`t`), undo (`u`), pin/unpin message (`p`), edit notes (`n`), cycle
+compaction mode (`s`). See [Pulse overlay keybindings](#pulse-overlay) above.
+
+### Notes Editor
+Inline text editor opened via `:notes` or `n` inside the Pulse overlay.
+Edits are saved to the active conversation on close.
