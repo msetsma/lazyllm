@@ -18,103 +18,122 @@ Enter
 Sleep 3s
 Show
 
-# Pause to show the UI
+# Pause to show the initial UI
 Sleep 1s
 
-# First chat: enter insert mode and say hello
+# ── Build up context with two exchanges ───────────────────
 Type "i"
 Sleep 400ms
-Type "Say hello!"
+Type "What is Rust's ownership model? Keep it brief."
 Sleep 800ms
 Enter
-Sleep 5s
+Sleep 9s
 
-# Back to normal mode
 Escape
+Sleep 500ms
+
+Type "i"
+Sleep 300ms
+Type "Show a quick borrow example in code."
+Sleep 700ms
+Enter
+Sleep 9s
+
+Escape
+Sleep 500ms
+
+# ── Pulse overlay: context budget & session stats ─────────
+Type "P"
+Sleep 1.5s
+
+# Scroll down through session stats, pinned messages, notes
+Type "j"
+Sleep 600ms
+Type "j"
+Sleep 600ms
+Type "j"
 Sleep 600ms
 
-# Toggle timestamps on via command mode
+# Cycle compaction mode with 's' to show profile options
+Type "s"
+Sleep 900ms
+Type "s"
+Sleep 900ms
+Type "s"
+Sleep 700ms
+
+# Scroll back up to the budget view
+Type "k"
+Sleep 500ms
+Type "k"
+Sleep 500ms
+Type "k"
+Sleep 500ms
+
+# Close Pulse
+Type "P"
+Sleep 800ms
+
+# ── Visual mode: highlight and copy a message ─────────────
+Type "v"
+Sleep 900ms
+Type "k"
+Sleep 700ms
+Type "y"
+Sleep 1.2s
+Escape
+Sleep 700ms
+
+# ── Command mode: toggle timestamps ───────────────────────
 Type ":set timestamps on"
 Enter
 Sleep 1s
 
-# Enter visual mode — highlight moves to last message
-Type "v"
-Sleep 1s
-
-# Scroll up through messages with k
-Type "k"
-Sleep 800ms
-
-# Copy the selected message
-Type "y"
-Sleep 1.5s
-
-# Exit visual mode — snaps back to bottom
-Escape
-Sleep 800ms
-
-# Focus to chat list and create a second chat
-Type "h"
-Sleep 500ms
-Type "n"
-Sleep 800ms
-
-# Focus to input and send a message in the second chat
-Type "l"
-Sleep 300ms
-Type "i"
-Sleep 400ms
-Type "What is 2 + 2?"
-Sleep 800ms
-Enter
-Sleep 5s
-
-# Back to normal and toggle between chats
-Escape
-Sleep 500ms
-Type "h"
-Sleep 500ms
-Type "k"
-Sleep 800ms
-Enter
-Sleep 1s
-
-# Back to second chat
-Type "j"
-Sleep 800ms
-Enter
-Sleep 1s
-
-# Focus back to chat view
-Type "l"
-Sleep 500ms
-
-# Open tool panel popup
-Type "t"
-Sleep 1.5s
-Escape
-Sleep 500ms
-
-# Open help overlay — keys are blocked while open
-Type "?"
-Sleep 2s
-Escape
-Sleep 500ms
-
-# Open model selector popup
+# ── Model switcher ────────────────────────────────────────
 Type "m"
 Sleep 2s
 Escape
 Sleep 500ms
 
-# Delete the current chat
-Type "h"
+# ── Help overlay ──────────────────────────────────────────
+Type "?"
+Sleep 2.5s
+Escape
 Sleep 500ms
-Type "d"
-Sleep 1s
 
-# Quit — hidden so the recording ends on the app
+# ── New chat ──────────────────────────────────────────────
+Type "h"
+Sleep 400ms
+Type "n"
+Sleep 800ms
+
+Type "l"
+Sleep 300ms
+Type "i"
+Sleep 300ms
+Type "What is 2 + 2?"
+Sleep 700ms
+Enter
+Sleep 6s
+
+Escape
+Sleep 500ms
+
+# ── Switch between chats ──────────────────────────────────
+Type "h"
+Sleep 400ms
+Type "k"
+Sleep 700ms
+Enter
+Sleep 900ms
+Type "j"
+Sleep 700ms
+Enter
+Sleep 900ms
+Type "l"
+Sleep 400ms
+
+# Quit — hidden so the recording ends cleanly on the app
 Hide
 Type "q"
 Sleep 500ms
